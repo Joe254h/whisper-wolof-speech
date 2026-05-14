@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Wolof Whisper Speech</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Wolof ASR</p>
+          <h1>Whisper speech transcription</h1>
+        </div>
+        <div class="model-pill" id="modelPill">
+          <span class="pulse"></span>
+          <span id="modelStatus">Checking model</span>
+        </div>
+      </header>
+
+      <section class="workspace" aria-label="Transcription workspace">
+        <section class="panel input-panel">
+          <div class="tabbar" role="tablist" aria-label="Audio source">
+            <button class="tab is-active" data-tab="mic" type="button">
+              <i data-lucide="mic"></i>
+              Microphone
+            </button>
+            <button class="tab" data-tab="upload" type="button">
+              <i data-lucide="upload"></i>
+              Upload
+            </button>
+            <button class="tab" data-tab="samples" type="button">
+              <i data-lucide="waveform"></i>
+              Samples
+            </button>
+          </div>
+
+          <div class="tab-panel is-active" id="tab-mic">
+            <div class="field-row">
+              <label for="micSelect">Microphone</label>
+              <div class="select-line">
+                <select id="micSelect"></select>
+                <button class="icon-button" id="refreshMics" type="button" title="Refresh microphones" aria-label="Refresh microphones">
+                  <i data-lucide="refresh-cw"></i>
+                </button>
+              </div>
+            </div>
+
+            <div class="recorder">
+              <canvas id="waveform" width="900" height="180" aria-label="Microphone waveform"></canvas>
+              <div class="meter" aria-label="Input level">
+                <span id="meterFill"></span>
+              </div>
+              <div class="record-meta">
+                <span id="timer">00:00</span>
+                <span id="levelHint">Ready</span>
+              </div>
+            </div>
+
+            <div class="button-row">
+              <button class="primary" id="startRecording" type="button">
+                <i data-lucide="circle"></i>
+                Record
+              </button>
+              <button id="stopRecording" type="button" disabled>
+                <i data-lucide="square"></i>
+                Stop
+              </button>
+              <button id="sendRecording" type="button" disabled>
+                <i data-lucide="send"></i>
+                Transcribe
+              </button>
+            </div>
+            <audio id="recordingPreview" controls hidden></audio>
+          </div>
+
+          <div class="tab-panel" id="tab-upload">
+            <label class="dropzone" for="fileInput" id="dropzone">
+              <i data-lucide="file-audio"></i>
+              <span id="dropzoneText">Choose audio</span>
+              <small>.wav, .mp3, .m4a, .flac</small>
+            </label>
+            <input id="fileInput" type="file" accept=".wav,.mp3,.m4a,.flac,audio/wav,audio/mpeg,audio/mp4,audio/flac" hidden>
+            <audio id="uploadPreview" controls hidden></audio>
+            <div class="button-row">
+              <button class="primary" id="sendUpload" type="button" disabled>
+                <i data-lucide="send"></i>
+                Transcribe
+              </button>
+            </div>
+          </div>
+
+          <div class="tab-panel" id="tab-samples">
+            <div class="sample-grid" id="sampleGrid"></div>
+          </div>
+        </section>
+
+        <section class="panel output-panel">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Output</p>
+              <h2>Transcript</h2>
+            </div>
+            <span class="state-chip" id="resultMeta">No audio yet</span>
+          </div>
+          <div class="transcript-box" id="transcript" aria-live="polite">Your Wolof transcription will appear here.</div>
+          <div class="button-row">
+            <button id="copyText" type="button" disabled>
+              <i data-lucide="copy"></i>
+              Copy
+            </button>
+            <button id="downloadText" type="button" disabled>
+              <i data-lucide="download"></i>
+              Download
+            </button>
+            <button id="clearText" type="button">
+              <i data-lucide="eraser"></i>
+              Clear
+            </button>
+          </div>
+        </section>
+      </section>
+
+      <section class="requirements-band">
+        <div>
+          <p class="eyebrow">Model requirements (Whisper)</p>
+          <h2>Audio input target</h2>
+        </div>
+        <ul>
+          <li><strong>Best audio format:</strong> .wav (also works with .mp3, .m4a, .flac)</li>
+          <li><strong>Sampling frequency:</strong> 16 kHz</li>
+          <li><strong>Audio type:</strong> mono waveform (single channel)</li>
+          <li><strong>Microphone capture:</strong> noise suppression, echo cancellation, automatic gain, and browser-side 16 kHz mono WAV export</li>
+        </ul>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  </body>
+</html>

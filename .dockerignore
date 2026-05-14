@@ -1,0 +1,13 @@
+.git
+.github
+.ipynb_checkpoints
+__pycache__
+*.pyc
+.pytest_cache
+.venv
+venv
+env
+uploads
+*.log
+final-whisper-wolof/.ipynb_checkpoints
+*.ipynb
