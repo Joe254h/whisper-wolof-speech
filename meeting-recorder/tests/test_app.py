@@ -183,3 +183,18 @@ def test_index_and_config(env):
     assert b"Share meeting tab and start" in client.get("/").data
     cfg = client.get("/api/config").get_json()
     assert cfg["languages"] == {"en": "English", "sw": "Kiswahili"} and cfg["max_minutes"] == 60
+
+
+def test_recording_longer_than_limit_is_trimmed_not_rejected(env, monkeypatch):
+    client, transcriber, writer, tmp = env
+    monkeypatch.setattr(services, "MAX_MINUTES", 1)
+    monkeypatch.setattr(services, "SEGMENT_SECONDS", 40)
+    src = tmp / "long.webm"
+    make_audio(src, 90)
+    sid = client.post("/api/sessions", json={"language": "en"}).get_json()["id"]
+    assert client.post(f"/api/sessions/{sid}/chunk?seq=0", data=src.read_bytes()).status_code == 200
+    client.post(f"/api/sessions/{sid}/finish", json={})
+    s = wait_done(client, sid)
+    assert s["status"] == "done", s["error"]
+    assert s["duration_seconds"] == 60
+    assert len(transcriber.calls) == 2  # 0-40 s and 40-60 s; nothing past the limit

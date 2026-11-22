@@ -11,3 +11,4 @@ uploads
 *.log
 final-whisper-wolof/.ipynb_checkpoints
 *.ipynb
+meeting-recorder/

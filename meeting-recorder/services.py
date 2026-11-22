@@ -205,11 +205,14 @@ def probe_duration(path: Path) -> float:
     return seconds
 
 
-def split_audio(path: Path, workdir: Path, segment_seconds: int = SEGMENT_SECONDS) -> list[Path]:
-    """Convert to 16 kHz mono MP3 and cut into equal pieces Whisper accepts (< 25 MB each)."""
+def split_audio(path: Path, workdir: Path, segment_seconds: int | None = None,
+                max_seconds: int | None = None) -> list[Path]:
+    """Convert to 16 kHz mono MP3, keep at most max_seconds, and cut into pieces Whisper accepts (< 25 MB each)."""
+    segment_seconds = segment_seconds or SEGMENT_SECONDS
+    max_seconds = max_seconds or MAX_MINUTES * 60
     pattern = workdir / "part_%03d.mp3"
     cmd = [
-        "ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(path),
+        "ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(path), "-t", str(max_seconds),
         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "48k",
         "-f", "segment", "-segment_time", str(segment_seconds), "-reset_timestamps", "1",
         str(pattern),
@@ -424,14 +427,13 @@ class Processor:
         if not audio.exists() or audio.stat().st_size == 0:
             raise RuntimeError("No audio was recorded for this meeting.")
         self.store.update(sid, status="transcribing", stage="Preparing audio", progress=0.02)
-        duration = probe_duration(audio)
-        if duration > MAX_MINUTES * 60 + 90:
-            raise RuntimeError(f"Recordings are limited to {MAX_MINUTES} minutes.")
+        # Anything past the limit (e.g. a long upload) is trimmed rather than rejected.
+        duration = min(probe_duration(audio), MAX_MINUTES * 60)
         self.store.update(sid, duration_seconds=round(duration, 1))
 
         segments: list[dict] = []
         with tempfile.TemporaryDirectory() as tmp:
-            parts = split_audio(audio, Path(tmp))
+            parts = split_audio(audio, Path(tmp), SEGMENT_SECONDS, MAX_MINUTES * 60)
             for i, part in enumerate(parts):
                 self.store.update(
                     sid, stage=f"Transcribing part {i + 1} of {len(parts)}",

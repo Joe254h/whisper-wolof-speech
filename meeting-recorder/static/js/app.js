@@ -202,6 +202,7 @@ const tape = {
 };
 
 window.addEventListener("resize", () => tape.draw());
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") tape.draw(); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => tape.draw());
 
 // ---------------------------------------------------------------- live recording
@@ -300,7 +301,7 @@ async function startRecording() {
   const rec = {
     id: session.id, ctx, display, mic, recorder, anMeet, anMe,
     buf: new Float32Array(1024), started: performance.now(), seq: 0,
-    queue: Promise.resolve(), failed: false, stopping: false, raf: 0, tick: 0,
+    queue: Promise.resolve(), pending: 0, offline: false, stopping: false, timer: 0, stopTimer: 0,
     maxSec: (state.config ? state.config.max_minutes : 60) * 60,
   };
   state.rec = rec;
@@ -308,6 +309,7 @@ async function startRecording() {
   recorder.ondataavailable = (ev) => {
     if (!ev.data || ev.data.size === 0) return;
     const seq = rec.seq++;
+    rec.pending++;
     rec.queue = rec.queue.then(() => sendChunk(rec, seq, ev.data));
   };
   recorder.onerror = (ev) => {
@@ -330,39 +332,55 @@ async function startRecording() {
   window.addEventListener("beforeunload", warnUnload);
   refreshSessions();
 
-  const loop = () => {
+  // Timers, not requestAnimationFrame: rAF pauses while the user is in the meeting tab.
+  rec.stopTimer = setTimeout(() => {
+    toast("Reached the time limit, so the recording stopped.");
+    stopRecording();
+  }, rec.maxSec * 1000);
+  const tick = () => {
     const elapsed = (performance.now() - rec.started) / 1000;
     const sec = Math.min(3599, Math.floor(elapsed));
     tape.meet[sec] = Math.max(tape.meet[sec], levelOf(rec.anMeet, rec.buf));
     if (rec.anMe) tape.me[sec] = Math.max(tape.me[sec], levelOf(rec.anMe, rec.buf));
     tape.elapsed = elapsed;
-    if (++rec.tick % 2 === 0) tape.draw();
-    $("#clock").textContent = fmtClock(elapsed);
-    $("#clockSub").textContent = `${fmtClock(rec.maxSec - elapsed)} left`;
-    if (elapsed >= rec.maxSec) {
-      toast("Reached the one-hour limit, so the recording stopped.");
-      stopRecording();
-      return;
+    if (document.visibilityState === "visible") {
+      tape.draw();
+      $("#clock").textContent = fmtClock(elapsed);
+      $("#clockSub").textContent = `${fmtClock(rec.maxSec - elapsed)} left`;
     }
-    rec.raf = requestAnimationFrame(loop);
+    if (elapsed >= rec.maxSec + 2) stopRecording(); // backup for the one-shot timer
   };
-  rec.raf = requestAnimationFrame(loop);
+  rec.timer = setInterval(tick, 200);
+  tick();
 }
 
+// Keeps retrying until the server has the chunk: a dropped connection must not lose
+// the rest of the meeting. Later chunks wait in memory behind this one.
 async function sendChunk(rec, seq, blob) {
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; ; attempt++) {
     try {
       await api(`/api/sessions/${rec.id}/chunk?seq=${seq}`, {
         method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: blob,
       });
-      return;
+      rec.pending--;
+      if (rec.offline) {
+        rec.offline = false;
+        setNotice($("#liveNotice"), "Connection is back. All audio so far is saved.", "good");
+      }
+      return true;
     } catch (e) {
-      if (e.status === 409 || e.status === 404) break;
-      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+      if (e.status === 404 || e.status === 409 || rec.abandon) {
+        rec.pending--;
+        rec.lost = (rec.lost || 0) + 1;
+        return false;
+      }
+      rec.offline = true;
+      setNotice($("#liveNotice"),
+        `Can’t reach the server. Still recording; ${rec.pending} piece${rec.pending === 1 ? "" : "s"} of audio will upload when the connection returns.`,
+        "error");
+      await new Promise((r) => setTimeout(r, Math.min(10000, 1000 * 2 ** attempt)));
     }
   }
-  rec.failed = true;
-  setNotice($("#liveNotice"), "Some audio could not reach the server. Check your connection; the recording continues.", "error");
 }
 
 function warnUnload(e) {
@@ -374,7 +392,8 @@ async function stopRecording() {
   const rec = state.rec;
   if (!rec || rec.stopping) return;
   rec.stopping = true;
-  cancelAnimationFrame(rec.raf);
+  clearInterval(rec.timer);
+  clearTimeout(rec.stopTimer);
   $("#stopBtn").disabled = true;
   setNotice($("#liveNotice"), "Saving the last few seconds…");
 
@@ -386,14 +405,27 @@ async function stopRecording() {
   rec.display.getTracks().forEach((t) => t.stop());
   rec.mic && rec.mic.getTracks().forEach((t) => t.stop());
   rec.ctx.close();
-  await rec.queue;
+
+  // Give queued audio up to two minutes to reach the server before processing.
+  const deadline = Date.now() + 120000;
+  let drained = false;
+  rec.queue.then(() => { drained = true; });
+  while (!drained && Date.now() < deadline) {
+    if (rec.pending > 0) setNotice($("#liveNotice"), `Uploading the last ${rec.pending} piece${rec.pending === 1 ? "" : "s"} of audio… keep this tab open.`);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (!drained) rec.abandon = true;
   window.removeEventListener("beforeunload", warnUnload);
 
   try {
     await api(`/api/sessions/${rec.id}/finish`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: state.model }),
     });
-    setNotice($("#liveNotice"), "Recording saved. Transcribing now — the report appears below.", "good");
+    if (drained && !rec.lost) {
+      setNotice($("#liveNotice"), "Recording saved. Transcribing now — the report appears below.", "good");
+    } else {
+      setNotice($("#liveNotice"), "The connection didn’t recover in time, so the last part of the audio is missing. Transcribing everything that reached the server.", "error");
+    }
   } catch (e) {
     setNotice($("#liveNotice"), e.message, "error");
   }
