@@ -89,3 +89,7 @@ git push -u origin main
 ## Notes
 
 The app is meant for short speech clips and demos. Very long recordings will work more slowly, especially on CPU hardware. If you move the model to a separate Hugging Face model repository later, set `MODEL_REPO_ID` in the Space settings and the Flask app will load from that model repo instead of the local folder.
+
+## Kikao meeting recorder
+
+`meeting-recorder/` holds a separate app. It records Teams or Google Meet meetings in the browser for up to one hour, transcribes them with OpenAI Whisper (English or Kiswahili), and writes a formatted report through OpenRouter. See [meeting-recorder/README.md](meeting-recorder/README.md).

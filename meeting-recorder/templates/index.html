@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kikao · Meeting reports</title>
+  <meta name="description" content="Record a Teams or Google Meet meeting, transcribe it with Whisper in English or Kiswahili, and get a formatted report.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2316203B'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23E0393E'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,650;12..96,800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Kikao home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Kikao</span>
+    </a>
+    <div class="services" id="services" aria-live="polite"></div>
+    <button class="btn ghost" id="openTemplate" type="button">Report template</button>
+  </header>
+
+  <main>
+    <!-- Studio ------------------------------------------------------------- -->
+    <section class="studio" aria-labelledby="studioTitle">
+      <div class="studio-head">
+        <h1 id="studioTitle">Record a meeting, get the minutes.</h1>
+        <div class="modes" role="tablist" aria-label="How to add a meeting">
+          <button role="tab" aria-selected="true" aria-controls="liveMode" id="tabLive" class="mode active" type="button">Record live</button>
+          <button role="tab" aria-selected="false" aria-controls="uploadMode" id="tabUpload" class="mode" type="button">Upload a recording</button>
+        </div>
+      </div>
+
+      <form class="setup" id="setupForm" autocomplete="off" onsubmit="return false">
+        <label class="field grow">
+          <span>Meeting title</span>
+          <input id="title" type="text" maxlength="140" placeholder="Weekly project sync">
+        </label>
+        <fieldset class="field">
+          <legend>Spoken language</legend>
+          <div class="segmented" id="language">
+            <label><input type="radio" name="language" value="en" checked><span>English</span></label>
+            <label><input type="radio" name="language" value="sw"><span>Kiswahili</span></label>
+          </div>
+        </fieldset>
+        <label class="field">
+          <span>Write report in</span>
+          <select id="reportLanguage">
+            <option value="same">Same as meeting</option>
+            <option value="en">English</option>
+            <option value="sw">Kiswahili</option>
+          </select>
+        </label>
+      </form>
+
+      <!-- Live recording -->
+      <div id="liveMode" role="tabpanel" aria-labelledby="tabLive">
+        <div class="tape" id="tape">
+          <div class="tape-readout">
+            <div>
+              <div class="clock" id="clock">00:00</div>
+              <div class="clock-sub" id="clockSub">of {{ max_minutes }}:00 available</div>
+            </div>
+            <div class="rec-state" id="recState"><span class="dot"></span><span id="recStateText">Ready</span></div>
+          </div>
+          <canvas id="tapeCanvas" height="150" aria-label="Audio levels for the meeting and your microphone over the hour"></canvas>
+          <div class="lanes-key" aria-hidden="true">
+            <span class="key meet">Meeting audio</span>
+            <span class="key me">Your microphone</span>
+          </div>
+        </div>
+
+        <div class="controls">
+          <label class="check">
+            <input type="checkbox" id="includeMic" checked>
+            <span>Include my microphone</span>
+          </label>
+          <div class="control-buttons">
+            <button class="btn record" id="startBtn" type="button"><span class="rec-icon" aria-hidden="true"></span>Share meeting tab and start</button>
+            <button class="btn stop" id="stopBtn" type="button" hidden><span class="stop-icon" aria-hidden="true"></span>Stop and write report</button>
+          </div>
+        </div>
+        <p class="notice" id="liveNotice" role="status"></p>
+
+        <details class="howto">
+          <summary>How to capture Teams or Google Meet</summary>
+          <ol>
+            <li>Join the meeting in <strong>Chrome or Edge</strong> in another tab (Meet, or Teams on the web).</li>
+            <li>Press <em>Share meeting tab and start</em>, pick the meeting tab, and keep <strong>Also share tab audio</strong> switched on.</li>
+            <li>Leave this tab open. Audio is saved to the server every 15 seconds, so a dropped connection loses very little.</li>
+            <li>Using the Teams desktop app? Choose <em>Entire screen</em> and tick <strong>Share system audio</strong> (Windows only). On macOS, join the meeting from the browser instead.</li>
+          </ol>
+          <p>Recording stops by itself after {{ max_minutes }} minutes. Let the other participants know the meeting is being recorded.</p>
+        </details>
+      </div>
+
+      <!-- Upload -->
+      <div id="uploadMode" role="tabpanel" aria-labelledby="tabUpload" hidden>
+        <label class="dropzone" id="dropzone">
+          <input type="file" id="fileInput" accept=".webm,.ogg,.wav,.mp3,.m4a,.mp4,.flac,.aac,audio/*,video/mp4">
+          <span class="drop-title">Drop a meeting recording here</span>
+          <span class="drop-sub" id="dropSub">MP3, M4A, WAV, WebM or MP4 up to 60 minutes</span>
+        </label>
+        <div class="controls">
+          <span></span>
+          <button class="btn primary" id="uploadBtn" type="button" disabled>Transcribe and write report</button>
+        </div>
+        <p class="notice" id="uploadNotice" role="status"></p>
+      </div>
+    </section>
+
+    <!-- Library ------------------------------------------------------------ -->
+    <section class="library" aria-label="Meetings">
+      <aside class="list-pane">
+        <h2>Meetings</h2>
+        <ul class="session-list" id="sessionList"></ul>
+        <p class="empty" id="listEmpty">Meetings you record or upload will appear here.</p>
+      </aside>
+
+      <article class="detail" id="detail" aria-live="polite">
+        <div class="detail-empty" id="detailEmpty">
+          <p>Pick a meeting to read its report and transcript.</p>
+        </div>
+
+        <div id="detailBody" hidden>
+          <header class="detail-head">
+            <input class="detail-title" id="detailTitle" aria-label="Meeting title">
+            <p class="detail-meta" id="detailMeta"></p>
+          </header>
+
+          <ol class="pipeline" id="pipeline" aria-label="Processing progress">
+            <li data-step="audio"><span>Audio saved</span></li>
+            <li data-step="transcript"><span>Transcribed with Whisper</span></li>
+            <li data-step="report"><span>Report written</span></li>
+          </ol>
+          <div class="progress" id="progressWrap" hidden>
+            <div class="bar"><div id="progressBar"></div></div>
+            <span id="progressText"></span>
+          </div>
+          <div class="alert" id="errorBox" hidden>
+            <p id="errorText"></p>
+            <div class="alert-actions">
+              <button class="btn small" id="retryBtn" type="button">Retry</button>
+              <button class="btn small ghost" id="finishOrphanBtn" type="button" hidden>Process what was recorded</button>
+            </div>
+          </div>
+
+          <div class="tabs" role="tablist">
+            <button role="tab" class="tab active" data-tab="report" aria-selected="true" type="button">Report</button>
+            <button role="tab" class="tab" data-tab="transcript" aria-selected="false" type="button">Transcript</button>
+          </div>
+
+          <section class="tab-panel" id="panel-report">
+            <div class="toolbar">
+              <button class="btn small" id="copyReport" type="button">Copy</button>
+              <a class="btn small" id="downloadReport" href="#">Download .md</a>
+              <button class="btn small" id="printReport" type="button">Save as PDF</button>
+              <button class="btn small" id="editReport" type="button">Edit</button>
+              <button class="btn small ghost" id="regenReport" type="button">Rewrite report</button>
+            </div>
+            <div class="report" id="report"></div>
+            <textarea class="report-editor" id="reportEditor" hidden aria-label="Edit report Markdown"></textarea>
+          </section>
+
+          <section class="tab-panel" id="panel-transcript" hidden>
+            <div class="toolbar">
+              <audio id="player" controls preload="none"></audio>
+              <a class="btn small" id="downloadTranscript" href="#">Download .txt</a>
+              <a class="btn small" id="downloadAudio" href="#">Download audio</a>
+            </div>
+            <ol class="transcript" id="transcript"></ol>
+          </section>
+
+          <footer class="detail-foot">
+            <button class="btn small danger" id="deleteBtn" type="button">Delete meeting</button>
+          </footer>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <!-- Template dialog -->
+  <dialog id="templateDialog" aria-labelledby="templateTitle">
+    <form method="dialog" class="dialog-body">
+      <h2 id="templateTitle">Report template</h2>
+      <p class="hint">The model keeps these headings, order and tables, and replaces the guidance under each heading with what was said. <code>{{ '{{title}}' }}</code>, <code>{{ '{{date}}' }}</code> and <code>{{ '{{language}}' }}</code> are filled in for you.</p>
+      <textarea id="templateText" spellcheck="false"></textarea>
+      <label class="field model-field">
+        <span>OpenRouter model for new reports</span>
+        <input id="modelInput" type="text" placeholder="google/gemini-2.5-flash">
+      </label>
+      <div class="dialog-actions">
+        <button class="btn ghost" id="resetTemplate" type="button">Restore default</button>
+        <span class="spacer"></span>
+        <button class="btn ghost" value="cancel" type="submit">Cancel</button>
+        <button class="btn primary" id="saveTemplate" type="button">Save template</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="{{ url_for('static', filename='vendor/marked.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='vendor/purify.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

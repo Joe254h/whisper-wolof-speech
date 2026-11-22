@@ -1,0 +1,6 @@
+Flask==3.0.3
+gunicorn==22.0.0
+requests==2.32.3
+python-dotenv==1.0.1
+# Optional: transcribe on this machine instead of the OpenAI API (set TRANSCRIBER=local)
+# faster-whisper==1.0.3

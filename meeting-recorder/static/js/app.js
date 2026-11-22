@@ -1,0 +1,822 @@
+"use strict";
+
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+const state = {
+  config: null,
+  sessions: [],
+  selectedId: null,
+  selected: null,
+  editing: false,
+  pollTimer: null,
+  model: "",
+  rec: null, // live recording state
+};
+
+const CHUNK_MS = 15000;
+const BUSY = new Set(["queued", "transcribing", "writing"]);
+const STATUS_LABEL = {
+  recording: "Recording", queued: "Queued", transcribing: "Transcribing",
+  writing: "Writing", done: "Ready", error: "Needs attention",
+};
+const LANG = { en: "English", sw: "Kiswahili" };
+
+try { state.model = localStorage.getItem("kikao.model") || ""; } catch (_) { /* storage blocked */ }
+
+// ---------------------------------------------------------------- helpers
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, opts);
+  let body = null;
+  try { body = await res.json(); } catch (_) { /* non-JSON */ }
+  if (!res.ok) {
+    const err = new Error((body && body.error) || `Request failed (${res.status})`);
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
+  return body;
+}
+
+function toast(msg) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => el.classList.remove("show"), 2600);
+}
+
+function fmtClock(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const mm = String(m).padStart(2, "0"), ss = String(s).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
+function fmtDuration(sec) {
+  if (!sec) return null;
+  const m = Math.round(sec / 60);
+  return m < 1 ? "under a minute" : m === 1 ? "1 minute" : `${m} minutes`;
+}
+
+function fmtDate(ts) {
+  return new Date(ts * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function setNotice(el, msg, kind = "") {
+  el.textContent = msg || "";
+  el.className = "notice" + (kind ? " " + kind : "");
+}
+
+function formValues() {
+  return {
+    title: $("#title").value.trim(),
+    language: document.querySelector('input[name="language"]:checked').value,
+    report_language: $("#reportLanguage").value,
+  };
+}
+
+function renderMarkdown(md) {
+  if (window.marked && window.DOMPurify) {
+    return DOMPurify.sanitize(marked.parse(md, { gfm: true, breaks: true }));
+  }
+  const pre = document.createElement("pre");
+  pre.textContent = md;
+  pre.style.whiteSpace = "pre-wrap";
+  return pre.outerHTML;
+}
+
+// ---------------------------------------------------------------- config / services
+
+async function loadConfig() {
+  try {
+    state.config = await api("/api/config");
+  } catch (e) {
+    $("#services").innerHTML = "";
+    return;
+  }
+  const c = state.config;
+  const pills = [
+    { ok: c.transcriber.ready, on: `Whisper · ${c.transcriber.backend === "local" ? "on this server" : "OpenAI"}`,
+      off: c.transcriber.backend === "local" ? "Whisper: install faster-whisper" : "Whisper: add OPENAI_API_KEY" },
+    { ok: c.writer.ready, on: "Reports · OpenRouter", off: "Reports: add OPENROUTER_API_KEY" },
+  ];
+  $("#services").innerHTML = "";
+  for (const p of pills) {
+    const s = document.createElement("span");
+    s.className = "pill" + (p.ok ? "" : " off");
+    s.textContent = p.ok ? p.on : p.off;
+    $("#services").append(s);
+  }
+  $("#modelInput").placeholder = c.writer.model;
+}
+
+// ---------------------------------------------------------------- tape canvas
+
+const tape = {
+  canvas: $("#tapeCanvas"),
+  meet: new Float32Array(3600),
+  me: new Float32Array(3600),
+  elapsed: 0,
+  draw() {
+    const c = this.canvas;
+    const dpr = window.devicePixelRatio || 1;
+    const w = c.clientWidth, h = c.clientHeight;
+    if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+      c.width = Math.round(w * dpr);
+      c.height = Math.round(h * dpr);
+    }
+    const ctx = c.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const css = getComputedStyle(document.documentElement);
+    const grid = css.getPropertyValue("--tape-grid").trim();
+    const text = css.getPropertyValue("--tape-text").trim();
+    const colMeet = css.getPropertyValue("--lane-meet").trim();
+    const colMe = css.getPropertyValue("--lane-me").trim();
+    const total = (state.config ? state.config.max_minutes : 60) * 60;
+
+    const labelH = 18;
+    const laneGap = 10;
+    const laneH = (h - labelH - laneGap) / 2;
+    const lanes = [
+      { y: 0, data: this.meet, color: colMeet },
+      { y: laneH + laneGap, data: this.me, color: colMe },
+    ];
+
+    // minute grid: a tick per 5 minutes, labels every 10
+    ctx.font = `500 11px ${css.getPropertyValue("--sans")}`;
+    ctx.textBaseline = "bottom";
+    for (let m = 0; m <= total / 60; m += 5) {
+      const x = Math.round((m * 60 / total) * (w - 1)) + 0.5;
+      ctx.strokeStyle = grid;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, h - labelH);
+      ctx.stroke();
+      const every = w < 560 ? 20 : 10;
+      if (m % every === 0) {
+        const last = m * 60 >= total;
+        ctx.fillStyle = text;
+        ctx.textAlign = m === 0 ? "left" : last ? "right" : "center";
+        ctx.fillText(m === 0 ? "0" : w < 560 && !last ? `${m}` : `${m} min`, x, h);
+      }
+    }
+
+    // lane baselines + level bars, one column per pixel
+    for (const lane of lanes) {
+      const mid = lane.y + laneH / 2;
+      ctx.strokeStyle = grid;
+      ctx.beginPath();
+      ctx.moveTo(0, mid + 0.5);
+      ctx.lineTo(w, mid + 0.5);
+      ctx.stroke();
+      ctx.fillStyle = lane.color;
+      const until = Math.min(this.elapsed, total);
+      const pxEnd = Math.floor((until / total) * w);
+      for (let px = 0; px < pxEnd; px++) {
+        const a = Math.floor((px / w) * total), b = Math.max(a + 1, Math.floor(((px + 1) / w) * total));
+        let peak = 0;
+        for (let i = a; i < b && i < lane.data.length; i++) peak = Math.max(peak, lane.data[i]);
+        const amp = Math.max(1, peak * (laneH / 2 - 2));
+        ctx.fillRect(px, mid - amp, 1, amp * 2);
+      }
+    }
+
+    // playhead
+    if (this.elapsed > 0) {
+      const x = Math.min(w - 1, (this.elapsed / total) * w);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(Math.round(x), 0, 2, h - labelH);
+    }
+  },
+  reset() {
+    this.meet.fill(0);
+    this.me.fill(0);
+    this.elapsed = 0;
+    this.draw();
+  },
+};
+
+window.addEventListener("resize", () => tape.draw());
+matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => tape.draw());
+
+// ---------------------------------------------------------------- live recording
+
+function levelOf(analyser, buf) {
+  analyser.getFloatTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+  const rms = Math.sqrt(sum / buf.length);
+  return Math.min(1, Math.sqrt(rms) * 1.6); // perceptual-ish scaling
+}
+
+function pickMime() {
+  const options = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
+  return options.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || "";
+}
+
+async function startRecording() {
+  const notice = $("#liveNotice");
+  setNotice(notice, "");
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+    setNotice(notice, "This browser cannot capture another tab. Open Kikao in Chrome or Edge on a computer.", "error");
+    return;
+  }
+  if (!window.isSecureContext) {
+    setNotice(notice, "Capture needs a secure page. Open Kikao on https:// or http://localhost.", "error");
+    return;
+  }
+  const mime = pickMime();
+  if (!mime) {
+    setNotice(notice, "This browser cannot record WebM audio. Use Chrome or Edge.", "error");
+    return;
+  }
+
+  let display, mic = null, micBlocked = false;
+  try {
+    // Ask for the share first, while the click still counts as a user gesture.
+    display = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      preferCurrentTab: false,
+      selfBrowserSurface: "exclude",
+      systemAudio: "include",
+    });
+  } catch (e) {
+    setNotice(notice, e.name === "NotAllowedError" ? "Sharing was cancelled. Press start and pick the meeting tab." : `Could not start sharing: ${e.message}`, "error");
+    return;
+  }
+
+  if (display.getAudioTracks().length === 0) {
+    display.getTracks().forEach((t) => t.stop());
+    setNotice(notice, "No meeting audio came through. Share the meeting tab again and keep “Also share tab audio” switched on.", "error");
+    return;
+  }
+
+  if ($("#includeMic").checked) {
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+    } catch (e) {
+      micBlocked = true;
+      setNotice(notice, "Microphone blocked, so only the meeting audio is recorded. Your own voice will be missing.", "error");
+    }
+  }
+
+  const v = formValues();
+  let session;
+  try {
+    session = await api("/api/sessions", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(v),
+    });
+  } catch (e) {
+    display.getTracks().forEach((t) => t.stop());
+    mic && mic.getTracks().forEach((t) => t.stop());
+    setNotice(notice, e.message, "error");
+    return;
+  }
+
+  // Mix tab audio and microphone into one track.
+  const ctx = new AudioContext();
+  const dest = ctx.createMediaStreamDestination();
+  const mk = (stream) => {
+    const src = ctx.createMediaStreamSource(new MediaStream(stream.getAudioTracks()));
+    const an = ctx.createAnalyser();
+    an.fftSize = 1024;
+    src.connect(an);
+    src.connect(dest);
+    return an;
+  };
+  const anMeet = mk(display);
+  const anMe = mic ? mk(mic) : null;
+
+  const recorder = new MediaRecorder(dest.stream, { mimeType: mime, audioBitsPerSecond: 48000 });
+  const rec = {
+    id: session.id, ctx, display, mic, recorder, anMeet, anMe,
+    buf: new Float32Array(1024), started: performance.now(), seq: 0,
+    queue: Promise.resolve(), failed: false, stopping: false, raf: 0, tick: 0,
+    maxSec: (state.config ? state.config.max_minutes : 60) * 60,
+  };
+  state.rec = rec;
+
+  recorder.ondataavailable = (ev) => {
+    if (!ev.data || ev.data.size === 0) return;
+    const seq = rec.seq++;
+    rec.queue = rec.queue.then(() => sendChunk(rec, seq, ev.data));
+  };
+  recorder.onerror = (ev) => {
+    setNotice(notice, `Recording error: ${ev.error ? ev.error.message : "unknown"}. Stopping.`, "error");
+    stopRecording();
+  };
+  display.getAudioTracks()[0].addEventListener("ended", () => {
+    if (!rec.stopping) {
+      toast("Sharing ended, so the recording stopped.");
+      stopRecording();
+    }
+  });
+  recorder.start(CHUNK_MS);
+
+  tape.reset();
+  setRecordingUI(true);
+  if (!micBlocked) {
+    setNotice(notice, mic ? "Recording the meeting and your microphone. Keep this tab open." : "Recording the meeting audio only. Keep this tab open.", "good");
+  }
+  window.addEventListener("beforeunload", warnUnload);
+  refreshSessions();
+
+  const loop = () => {
+    const elapsed = (performance.now() - rec.started) / 1000;
+    const sec = Math.min(3599, Math.floor(elapsed));
+    tape.meet[sec] = Math.max(tape.meet[sec], levelOf(rec.anMeet, rec.buf));
+    if (rec.anMe) tape.me[sec] = Math.max(tape.me[sec], levelOf(rec.anMe, rec.buf));
+    tape.elapsed = elapsed;
+    if (++rec.tick % 2 === 0) tape.draw();
+    $("#clock").textContent = fmtClock(elapsed);
+    $("#clockSub").textContent = `${fmtClock(rec.maxSec - elapsed)} left`;
+    if (elapsed >= rec.maxSec) {
+      toast("Reached the one-hour limit, so the recording stopped.");
+      stopRecording();
+      return;
+    }
+    rec.raf = requestAnimationFrame(loop);
+  };
+  rec.raf = requestAnimationFrame(loop);
+}
+
+async function sendChunk(rec, seq, blob) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      await api(`/api/sessions/${rec.id}/chunk?seq=${seq}`, {
+        method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: blob,
+      });
+      return;
+    } catch (e) {
+      if (e.status === 409 || e.status === 404) break;
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+    }
+  }
+  rec.failed = true;
+  setNotice($("#liveNotice"), "Some audio could not reach the server. Check your connection; the recording continues.", "error");
+}
+
+function warnUnload(e) {
+  e.preventDefault();
+  e.returnValue = "";
+}
+
+async function stopRecording() {
+  const rec = state.rec;
+  if (!rec || rec.stopping) return;
+  rec.stopping = true;
+  cancelAnimationFrame(rec.raf);
+  $("#stopBtn").disabled = true;
+  setNotice($("#liveNotice"), "Saving the last few seconds…");
+
+  await new Promise((resolve) => {
+    if (rec.recorder.state === "inactive") return resolve();
+    rec.recorder.addEventListener("stop", resolve, { once: true });
+    rec.recorder.stop();
+  });
+  rec.display.getTracks().forEach((t) => t.stop());
+  rec.mic && rec.mic.getTracks().forEach((t) => t.stop());
+  rec.ctx.close();
+  await rec.queue;
+  window.removeEventListener("beforeunload", warnUnload);
+
+  try {
+    await api(`/api/sessions/${rec.id}/finish`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: state.model }),
+    });
+    setNotice($("#liveNotice"), "Recording saved. Transcribing now — the report appears below.", "good");
+  } catch (e) {
+    setNotice($("#liveNotice"), e.message, "error");
+  }
+  state.rec = null;
+  setRecordingUI(false);
+  $("#clockSub").textContent = `of ${state.config ? state.config.max_minutes : 60}:00 available`;
+  await refreshSessions();
+  selectSession(rec.id);
+}
+
+function setRecordingUI(on) {
+  $("#startBtn").hidden = on;
+  $("#stopBtn").hidden = !on;
+  $("#stopBtn").disabled = false;
+  $("#recState").classList.toggle("live", on);
+  $("#recStateText").textContent = on ? "Recording" : "Ready";
+  for (const el of $$("#setupForm input, #setupForm select, #includeMic, .mode")) el.disabled = on;
+}
+
+// ---------------------------------------------------------------- upload
+
+let pickedFile = null;
+
+function pickFile(file) {
+  pickedFile = file || null;
+  $("#dropzone").classList.toggle("has-file", !!file);
+  $("#dropSub").textContent = file ? `${file.name} · ${(file.size / 1048576).toFixed(1)} MB` : "MP3, M4A, WAV, WebM or MP4 up to 60 minutes";
+  $("#uploadBtn").disabled = !file;
+  if (file && !$("#title").value.trim()) $("#title").value = file.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ");
+}
+
+function uploadFile() {
+  if (!pickedFile) return;
+  const v = formValues();
+  const fd = new FormData();
+  fd.append("audio", pickedFile);
+  fd.append("title", v.title);
+  fd.append("language", v.language);
+  fd.append("report_language", v.report_language);
+  if (state.model) fd.append("model", state.model);
+
+  const notice = $("#uploadNotice");
+  const btn = $("#uploadBtn");
+  btn.disabled = true;
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/sessions/upload");
+  xhr.upload.onprogress = (e) => {
+    if (e.lengthComputable) setNotice(notice, `Uploading… ${Math.round((e.loaded / e.total) * 100)}%`);
+  };
+  xhr.onload = async () => {
+    let body = {};
+    try { body = JSON.parse(xhr.responseText); } catch (_) { /* ignore */ }
+    if (xhr.status >= 200 && xhr.status < 300) {
+      setNotice(notice, "Uploaded. Transcribing now — the report appears below.", "good");
+      pickFile(null);
+      $("#fileInput").value = "";
+      await refreshSessions();
+      selectSession(body.id);
+    } else {
+      setNotice(notice, body.error || `Upload failed (${xhr.status}).`, "error");
+      btn.disabled = false;
+    }
+  };
+  xhr.onerror = () => {
+    setNotice(notice, "Upload failed. Check your connection and try again.", "error");
+    btn.disabled = false;
+  };
+  xhr.send(fd);
+}
+
+// ---------------------------------------------------------------- sessions list
+
+async function refreshSessions() {
+  try {
+    const { sessions } = await api("/api/sessions");
+    state.sessions = sessions;
+  } catch (_) {
+    return;
+  }
+  renderList();
+  schedulePoll();
+}
+
+function renderList() {
+  const ul = $("#sessionList");
+  ul.innerHTML = "";
+  $("#listEmpty").hidden = state.sessions.length > 0;
+  for (const s of state.sessions) {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "session-item" + (s.id === state.selectedId ? " active" : "");
+    const badgeClass = s.status === "done" ? "done" : s.status === "error" ? "error" : s.status === "recording" ? "recording" : "busy";
+    const live = state.rec && state.rec.id === s.id;
+    const meta = [LANG[s.language], fmtDuration(s.duration_seconds), fmtDate(s.created_at)].filter(Boolean).join(", ");
+    b.innerHTML = `<span class="s-title"></span><span class="badge ${badgeClass}"></span><span class="s-meta"></span>`;
+    b.querySelector(".s-title").textContent = s.title;
+    b.querySelector(".badge").textContent = live ? "Live" : s.status === "recording" ? "Unfinished" : STATUS_LABEL[s.status] || s.status;
+    b.querySelector(".s-meta").textContent = meta;
+    b.addEventListener("click", () => selectSession(s.id));
+    li.append(b);
+    ul.append(li);
+  }
+}
+
+function schedulePoll() {
+  clearTimeout(state.pollTimer);
+  const anyBusy = state.sessions.some((s) => BUSY.has(s.status));
+  if (anyBusy) {
+    state.pollTimer = setTimeout(async () => {
+      await refreshSessions();
+      if (state.selectedId && !state.editing) loadSelected();
+    }, 2500);
+  }
+}
+
+// ---------------------------------------------------------------- detail
+
+async function selectSession(id) {
+  if (!id) return;
+  state.selectedId = id;
+  state.editing = false;
+  renderList();
+  await loadSelected(true);
+  if (window.innerWidth < 900) $("#detail").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function loadSelected(fresh = false) {
+  const id = state.selectedId;
+  let s;
+  try {
+    s = await api(`/api/sessions/${id}`);
+  } catch (e) {
+    if (e.status === 404) {
+      state.selectedId = null;
+      $("#detailBody").hidden = true;
+      $("#detailEmpty").hidden = false;
+    }
+    return;
+  }
+  if (id !== state.selectedId) return;
+  const prev = state.selected;
+  state.selected = s;
+  renderDetail(s, fresh || !prev || prev.id !== s.id || prev.updated_at !== s.updated_at);
+}
+
+function renderDetail(s, full) {
+  $("#detailEmpty").hidden = true;
+  $("#detailBody").hidden = false;
+
+  if (document.activeElement !== $("#detailTitle")) $("#detailTitle").value = s.title;
+  const meta = [
+    `Spoken in ${LANG[s.language]}`,
+    fmtDuration(s.duration_seconds),
+    new Date(s.created_at * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }),
+    s.model ? `report by ${s.model}` : null,
+  ].filter(Boolean);
+  $("#detailMeta").textContent = meta.join("  /  ");
+
+  // pipeline
+  const steps = { audio: $('[data-step="audio"]'), transcript: $('[data-step="transcript"]'), report: $('[data-step="report"]') };
+  Object.values(steps).forEach((el) => el.className = "");
+  const live = state.rec && state.rec.id === s.id;
+  if (s.has_audio && s.status !== "recording") steps.audio.classList.add("done");
+  else if (s.status === "recording") steps.audio.classList.add(live ? "active" : "failed");
+  if (s.has_transcript) steps.transcript.classList.add("done");
+  else if (s.status === "transcribing" || s.status === "queued") steps.transcript.classList.add("active");
+  else if (s.status === "error") steps.transcript.classList.add("failed");
+  if (s.status === "done" || (s.has_report && !BUSY.has(s.status))) steps.report.classList.add("done");
+  else if (s.status === "writing") steps.report.classList.add("active");
+  else if (s.status === "error" && s.has_transcript) steps.report.classList.add("failed");
+
+  const busy = BUSY.has(s.status);
+  $("#progressWrap").hidden = !busy;
+  $("#progressBar").style.width = `${Math.round((s.progress || 0) * 100)}%`;
+  $("#progressText").textContent = s.stage || STATUS_LABEL[s.status];
+
+  const orphan = s.status === "recording" && !live;
+  $("#errorBox").hidden = !(s.status === "error" || orphan);
+  $("#errorText").textContent = orphan
+    ? "This recording was interrupted before it was submitted. You can still transcribe the audio that was saved."
+    : s.error || "";
+  $("#retryBtn").hidden = orphan;
+  $("#retryBtn").textContent = s.has_transcript ? "Retry report" : "Retry";
+  $("#finishOrphanBtn").hidden = !orphan;
+
+  // report
+  $("#downloadReport").href = `/api/sessions/${s.id}/report.md`;
+  for (const id of ["copyReport", "downloadReport", "printReport", "editReport"]) {
+    $("#" + id).toggleAttribute("disabled", !s.report);
+    $("#" + id).classList.toggle("is-disabled", !s.report);
+  }
+  $("#downloadReport").style.pointerEvents = s.report ? "" : "none";
+  $("#downloadReport").style.opacity = s.report ? "" : "0.45";
+  $("#regenReport").disabled = !s.has_transcript || busy;
+  $("#deleteBtn").disabled = busy || live;
+
+  if (full && !state.editing) {
+    $("#report").innerHTML = s.report
+      ? renderMarkdown(s.report)
+      : `<p class="placeholder">${busy ? "The report will appear here when processing finishes." : live ? "The report will be written after you stop recording." : "No report yet."}</p>`;
+    $("#reportEditor").hidden = true;
+    $("#report").hidden = false;
+    $("#editReport").textContent = "Edit";
+    renderTranscript(s);
+  }
+}
+
+function renderTranscript(s) {
+  const ol = $("#transcript");
+  ol.innerHTML = "";
+  const player = $("#player");
+  const src = s.has_audio ? `/api/sessions/${s.id}/audio` : "";
+  if (player.dataset.src !== src) {
+    player.dataset.src = src;
+    if (src) player.src = src; else player.removeAttribute("src");
+  }
+  $("#downloadAudio").href = `/api/sessions/${s.id}/audio?download=1`;
+  $("#downloadTranscript").href = `/api/sessions/${s.id}/transcript.txt`;
+  $("#downloadTranscript").style.display = s.transcript ? "" : "none";
+  $("#downloadAudio").style.display = s.has_audio ? "" : "none";
+  if (!s.transcript) {
+    const li = document.createElement("li");
+    li.innerHTML = '<span></span><span class="tx placeholder"></span>';
+    li.querySelector(".tx").textContent = "The transcript will appear here after Whisper finishes.";
+    ol.append(li);
+    return;
+  }
+  for (const seg of s.transcript) {
+    if (!seg.text) continue;
+    const li = document.createElement("li");
+    const ts = document.createElement("button");
+    ts.type = "button";
+    ts.className = "ts";
+    ts.textContent = fmtClock(seg.start);
+    ts.setAttribute("aria-label", `Play from ${fmtClock(seg.start)}`);
+    ts.addEventListener("click", () => {
+      player.currentTime = seg.start;
+      player.play().catch(() => {});
+    });
+    const tx = document.createElement("span");
+    tx.className = "tx";
+    tx.textContent = seg.text;
+    li.append(ts, tx);
+    ol.append(li);
+  }
+}
+
+// ---------------------------------------------------------------- detail actions
+
+async function saveTitle() {
+  const s = state.selected;
+  const v = $("#detailTitle").value.trim();
+  if (!s || !v || v === s.title) return;
+  await api(`/api/sessions/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: v }) });
+  s.title = v;
+  refreshSessions();
+  toast("Title saved");
+}
+
+async function toggleEdit() {
+  const s = state.selected;
+  if (!s || !s.report) return;
+  if (!state.editing) {
+    state.editing = true;
+    $("#reportEditor").value = s.report;
+    $("#reportEditor").hidden = false;
+    $("#report").hidden = true;
+    $("#editReport").textContent = "Save edits";
+    $("#reportEditor").focus();
+    return;
+  }
+  const text = $("#reportEditor").value;
+  await api(`/api/sessions/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ report: text }) });
+  state.editing = false;
+  s.report = text;
+  await loadSelected(true);
+  toast("Report saved");
+}
+
+async function retry(reportOnly) {
+  const s = state.selected;
+  if (!s) return;
+  try {
+    await api(`/api/sessions/${s.id}/retry`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ report_only: reportOnly, model: state.model }),
+    });
+  } catch (e) {
+    toast(e.message);
+    return;
+  }
+  state.editing = false;
+  await refreshSessions();
+  loadSelected(true);
+}
+
+async function finishOrphan() {
+  const s = state.selected;
+  try {
+    await api(`/api/sessions/${s.id}/finish`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: state.model }),
+    });
+  } catch (e) {
+    toast(e.message);
+    return;
+  }
+  await refreshSessions();
+  loadSelected(true);
+}
+
+async function deleteSelected() {
+  const s = state.selected;
+  if (!s || !confirm(`Delete “${s.title}” with its audio, transcript and report?`)) return;
+  try {
+    await api(`/api/sessions/${s.id}`, { method: "DELETE" });
+  } catch (e) {
+    toast(e.message);
+    return;
+  }
+  state.selectedId = null;
+  state.selected = null;
+  $("#detailBody").hidden = true;
+  $("#detailEmpty").hidden = false;
+  refreshSessions();
+  toast("Meeting deleted");
+}
+
+// ---------------------------------------------------------------- template dialog
+
+async function openTemplate() {
+  const { template } = await api("/api/template");
+  $("#templateText").value = template;
+  $("#modelInput").value = state.model;
+  $("#templateDialog").showModal();
+}
+
+async function saveTemplate() {
+  await api("/api/template", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ template: $("#templateText").value }),
+  });
+  state.model = $("#modelInput").value.trim();
+  try { localStorage.setItem("kikao.model", state.model); } catch (_) { /* storage blocked */ }
+  $("#templateDialog").close();
+  toast("Template saved");
+}
+
+async function resetTemplate() {
+  const { default: def } = await api("/api/template");
+  $("#templateText").value = def;
+}
+
+// ---------------------------------------------------------------- wiring
+
+function switchMode(live) {
+  $("#tabLive").classList.toggle("active", live);
+  $("#tabUpload").classList.toggle("active", !live);
+  $("#tabLive").setAttribute("aria-selected", live);
+  $("#tabUpload").setAttribute("aria-selected", !live);
+  $("#liveMode").hidden = !live;
+  $("#uploadMode").hidden = live;
+  if (live) tape.draw();
+}
+
+function switchTab(name) {
+  for (const t of $$(".tab")) {
+    const on = t.dataset.tab === name;
+    t.classList.toggle("active", on);
+    t.setAttribute("aria-selected", on);
+  }
+  $("#panel-report").hidden = name !== "report";
+  $("#panel-transcript").hidden = name !== "transcript";
+}
+
+$("#tabLive").addEventListener("click", () => switchMode(true));
+$("#tabUpload").addEventListener("click", () => switchMode(false));
+$("#startBtn").addEventListener("click", startRecording);
+$("#stopBtn").addEventListener("click", stopRecording);
+
+$("#fileInput").addEventListener("change", (e) => pickFile(e.target.files[0]));
+const dz = $("#dropzone");
+["dragenter", "dragover"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => dz.addEventListener(ev, () => dz.classList.remove("over")));
+dz.addEventListener("drop", (e) => {
+  e.preventDefault();
+  if (e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]);
+});
+$("#uploadBtn").addEventListener("click", uploadFile);
+
+$$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
+$("#detailTitle").addEventListener("change", saveTitle);
+$("#detailTitle").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+$("#copyReport").addEventListener("click", async () => {
+  if (!state.selected || !state.selected.report) return;
+  try {
+    await navigator.clipboard.writeText(state.selected.report);
+    toast("Report copied as Markdown");
+  } catch (_) {
+    toast("Copy is blocked here. Use Download .md instead.");
+  }
+});
+$("#printReport").addEventListener("click", () => {
+  if (!state.selected || !state.selected.report) return;
+  switchTab("report");
+  window.print();
+});
+$("#editReport").addEventListener("click", toggleEdit);
+$("#regenReport").addEventListener("click", () => {
+  if (state.selected && state.selected.has_report && !confirm("Rewrite the report from the transcript? Your edits will be replaced.")) return;
+  retry(true);
+});
+$("#retryBtn").addEventListener("click", () => retry(!!(state.selected && state.selected.has_transcript)));
+$("#finishOrphanBtn").addEventListener("click", finishOrphan);
+$("#deleteBtn").addEventListener("click", deleteSelected);
+
+$("#openTemplate").addEventListener("click", openTemplate);
+$("#saveTemplate").addEventListener("click", saveTemplate);
+$("#resetTemplate").addEventListener("click", resetTemplate);
+
+(async function init() {
+  await loadConfig();
+  tape.draw();
+  await refreshSessions();
+  if (state.sessions[0]) selectSession(state.sessions[0].id);
+})();
