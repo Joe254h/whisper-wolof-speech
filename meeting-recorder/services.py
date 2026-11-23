@@ -221,19 +221,26 @@ class Store:
             meta["audio_bytes"] += len(data)
             return self.save(meta)
 
-    def read_json(self, sid: str, name: str):
-        path = self.dir(sid) / name
-        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-
-    def write_json(self, sid: str, name: str, data) -> None:
-        (self.dir(sid) / name).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
+    # Transcript, report and slides are written to a temp file and swapped in under the
+    # lock, so a status poll never reads a half-written file.
     def read_text(self, sid: str, name: str) -> str | None:
         path = self.dir(sid) / name
-        return path.read_text(encoding="utf-8") if path.exists() else None
+        with self._lock:
+            return path.read_text(encoding="utf-8") if path.exists() else None
 
     def write_text(self, sid: str, name: str, text: str) -> None:
-        (self.dir(sid) / name).write_text(text, encoding="utf-8")
+        path = self.dir(sid) / name
+        tmp = path.with_name(f"{name}.{threading.get_ident()}.tmp")
+        with self._lock:
+            tmp.write_text(text, encoding="utf-8")
+            _replace_with_retry(tmp, path)
+
+    def read_json(self, sid: str, name: str):
+        text = self.read_text(sid, name)
+        return json.loads(text) if text is not None else None
+
+    def write_json(self, sid: str, name: str, data) -> None:
+        self.write_text(sid, name, json.dumps(data, ensure_ascii=False, indent=2))
 
 
 # --------------------------------------------------------------------------- audio

@@ -68,7 +68,9 @@ def make_audio(path: Path, seconds: int, fmt_args=("-c:a", "libopus", "-b:a", "3
 def wait_done(client, sid, timeout=60):
     end = time.time() + timeout
     while time.time() < end:
-        s = client.get(f"/api/sessions/{sid}").get_json()
+        r = client.get(f"/api/sessions/{sid}")
+        assert r.status_code == 200, r.data[:300]
+        s = r.get_json()
         if s["status"] in ("done", "error"):
             return s
         time.sleep(0.2)
@@ -343,7 +345,7 @@ def test_concurrent_polling_and_updates(tmp_path):
 def test_vocabulary_instructions_header_and_footer(env):
     client, transcriber, writer, tmp = env
     r = client.put("/api/settings", json={
-        "vocabulary": "AIMS Senegal\nWanjiru, M-Pesa\naims senegal",
+        "vocabulary": "Northwind Institute\nWanjiru, M-Pesa\nnorthwind institute",
         "instructions": "Use a formal tone.",
         "header": "**ACME Ltd. Minutes of {{title}}**",
         "footer": "Confidential. Prepared {{date}}.",
@@ -358,10 +360,10 @@ def test_vocabulary_instructions_header_and_footer(env):
                           content_type="multipart/form-data").get_json()["id"]
     s = wait_done(client, sid)
     assert s["status"] == "done", s["error"]
-    assert transcriber.prompts == ["AIMS Senegal, Wanjiru, M-Pesa."]  # duplicate removed
+    assert transcriber.prompts == ["Northwind Institute, Wanjiru, M-Pesa."]  # duplicate removed
     system, user = writer.messages[0]["content"], writer.messages[1]["content"]
     assert "Use a formal tone." in system
-    assert "VOCABULARY (correct spellings)\nAIMS Senegal, Wanjiru, M-Pesa" in user
+    assert "VOCABULARY (correct spellings)\nNorthwind Institute, Wanjiru, M-Pesa" in user
     assert s["report"].startswith("**ACME Ltd. Minutes of Board**\n\n# Report")
     assert s["report"].rstrip().endswith(".") and "Confidential. Prepared" in s["report"]
     assert "{{date}}" not in s["report"]
@@ -466,3 +468,33 @@ def test_every_download_format(env):
     Document(io.BytesIO(get("transcript", "docx")))
     assert b'"segments"' in get("transcript", "json")
     assert client.get(f"/api/sessions/{sid}/download/report.exe").status_code == 404
+
+
+def test_transcript_and_report_reads_never_see_half_written_files(tmp_path):
+    import threading
+
+    store = services.Store(tmp_path)
+    sid = store.create("x", "en", "same", "live")["id"]
+    big = [{"start": i, "end": i + 1, "text": "maneno " * 40} for i in range(400)]
+    store.write_json(sid, "transcript.json", big)
+    errors = []
+
+    def writer():
+        for _ in range(60):
+            store.write_json(sid, "transcript.json", big)
+            store.write_text(sid, "report.md", "# R\n" + "x" * 50000)
+
+    def reader():
+        for _ in range(200):
+            try:
+                data = store.read_json(sid, "transcript.json")
+                assert data is None or len(data) == 400
+                text = store.read_text(sid, "report.md")
+                assert text is None or len(text) == 50004
+            except Exception as e:
+                errors.append(repr(e))
+
+    threads = [threading.Thread(target=writer)] + [threading.Thread(target=reader) for _ in range(3)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert errors == [], errors[:3]
