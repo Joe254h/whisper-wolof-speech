@@ -375,7 +375,7 @@ class LocalTranscriber:
     parallel = False  # one model in memory; pieces run one after another
 
     def __init__(self):
-        self.model_name = os.environ.get("LOCAL_WHISPER_MODEL", "small")
+        self.model_name = os.environ.get("LOCAL_WHISPER_MODEL", "deepdml/faster-whisper-large-v3-turbo-ct2")
         self._model = None
         self._lock = threading.Lock()
 

@@ -48,7 +48,16 @@ Transcription needs **one** of these:
 
 Reports are written through OpenRouter (`OPENROUTER_API_KEY`, `OPENROUTER_MODEL`). An hour-long report with a Flash-class model costs a cent or two.
 
-When `GROQ_API_KEY` is set and `TRANSCRIBER` is empty, Kikao uses Groq. To run Whisper on your own machine instead, set `TRANSCRIBER=local` and `pip install faster-whisper`. That is free but slow on CPU: expect roughly the length of the meeting with the `small` model. For good Kiswahili accuracy use `LOCAL_WHISPER_MODEL=large-v3`, which needs a GPU.
+When `GROQ_API_KEY` is set and `TRANSCRIBER` is empty, Kikao uses Groq.
+
+To run Whisper on your own machine instead, set `TRANSCRIBER=local` and `pip install faster-whisper`. The model is downloaded from Hugging Face on first use.
+
+| `LOCAL_WHISPER_MODEL` | Download | Kiswahili quality | Speed on a laptop CPU |
+|---|---|---|---|
+| `deepdml/faster-whisper-large-v3-turbo-ct2` (default) | about 1.6 GB | good | about as long as the meeting, or longer |
+| `small` | about 0.5 GB | weak | faster than the meeting |
+
+With an NVIDIA GPU, turbo runs many times faster than real time.
 
 ## Run locally
 
