@@ -328,7 +328,7 @@ class OpenAITranscriber:
         self.name = provider
         self.label = cfg["label"]
         self.key_name = cfg["key"]
-        self.api_key = os.environ.get(cfg["key"], "")
+        self.api_key = os.environ.get(cfg["key"], "").strip()
         self.model = os.environ.get(cfg["model_env"], cfg["model"])
         self.base_url = cfg["url"]()
 
@@ -408,8 +408,9 @@ class LocalTranscriber:
 def make_transcriber():
     """TRANSCRIBER=groq|openai|local. Unset: Groq when GROQ_API_KEY is present, else OpenAI."""
     choice = os.environ.get("TRANSCRIBER", "").strip().lower()
-    if not choice:
-        choice = "groq" if os.environ.get("GROQ_API_KEY") else "openai"
+    if choice not in ("local", *OpenAITranscriber.PROVIDERS):
+        # Empty or misspelt (e.g. "qrok"): pick whichever provider has a key, Groq first.
+        choice = "groq" if os.environ.get("GROQ_API_KEY", "").strip() else "openai"
     if choice == "local":
         return LocalTranscriber()
     return OpenAITranscriber(choice if choice in OpenAITranscriber.PROVIDERS else "openai")
@@ -526,7 +527,7 @@ def deck_subtitle(meta: dict) -> str:
 
 class OpenRouterWriter:
     def __init__(self):
-        self.api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        self.api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
         self.model = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash")
 
     @property

@@ -498,3 +498,12 @@ def test_transcript_and_report_reads_never_see_half_written_files(tmp_path):
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert errors == [], errors[:3]
+
+
+def test_misspelt_transcriber_and_padded_keys(monkeypatch):
+    monkeypatch.setenv("TRANSCRIBER", "qrok")
+    monkeypatch.setenv("GROQ_API_KEY", " gsk-x ")
+    monkeypatch.setenv("OPENROUTER_API_KEY", " sk-or-x")
+    t = services.make_transcriber()
+    assert t.name == "groq" and t.api_key == "gsk-x"
+    assert services.OpenRouterWriter().api_key == "sk-or-x"

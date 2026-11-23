@@ -119,6 +119,13 @@ const tape = {
   canvas: $("#tapeCanvas"),
   meet: new Float32Array(3600),
   me: new Float32Array(3600),
+  // Grows to the recording limit, which can be set above an hour.
+  resize(seconds) {
+    if (this.meet.length !== seconds) {
+      this.meet = new Float32Array(seconds);
+      this.me = new Float32Array(seconds);
+    }
+  },
   elapsed: 0,
   draw() {
     const c = this.canvas;
@@ -150,7 +157,10 @@ const tape = {
     // minute grid: a tick per 5 minutes, labels every 10
     ctx.font = `500 11px ${css.getPropertyValue("--sans")}`;
     ctx.textBaseline = "bottom";
-    for (let m = 0; m <= total / 60; m += 5) {
+    // About 12 gridlines and 6 labels whatever the limit (60 min: 5/10, 180 min: 15/30).
+    const mins = total / 60;
+    const tick = [5, 10, 15, 30, 60].find((t) => mins / t <= 13) || 60;
+    for (let m = 0; m <= mins; m += tick) {
       const x = Math.round((m * 60 / total) * (w - 1)) + 0.5;
       ctx.strokeStyle = grid;
       ctx.lineWidth = 1;
@@ -158,9 +168,9 @@ const tape = {
       ctx.moveTo(x, 0);
       ctx.lineTo(x, h - labelH);
       ctx.stroke();
-      const every = w < 560 ? 20 : 10;
+      const every = tick * (w < 560 ? 4 : 2);
       if (m % every === 0) {
-        const last = m * 60 >= total;
+        const last = m + tick > mins;
         ctx.fillStyle = text;
         ctx.textAlign = m === 0 ? "left" : last ? "right" : "center";
         ctx.fillText(m === 0 ? "0" : w < 560 && !last ? `${m}` : `${m} min`, x, h);
@@ -325,6 +335,7 @@ async function startRecording() {
   });
   recorder.start(CHUNK_MS);
 
+  tape.resize(rec.maxSec);
   tape.reset();
   setRecordingUI(true);
   if (!micBlocked) {
@@ -340,7 +351,7 @@ async function startRecording() {
   }, rec.maxSec * 1000);
   const tick = () => {
     const elapsed = (performance.now() - rec.started) / 1000;
-    const sec = Math.min(3599, Math.floor(elapsed));
+    const sec = Math.min(tape.meet.length - 1, Math.floor(elapsed));
     tape.meet[sec] = Math.max(tape.meet[sec], levelOf(rec.anMeet, rec.buf));
     if (rec.anMe) tape.me[sec] = Math.max(tape.me[sec], levelOf(rec.anMe, rec.buf));
     tape.elapsed = elapsed;
