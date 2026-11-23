@@ -186,11 +186,27 @@ class Store:
 
 # --------------------------------------------------------------------------- audio
 
+_FFMPEG = None
+
+
+def ffmpeg() -> str:
+    """ffmpeg on PATH if installed, otherwise the copy bundled with imageio-ffmpeg."""
+    global _FFMPEG
+    if _FFMPEG is None:
+        _FFMPEG = shutil.which("ffmpeg")
+        if not _FFMPEG:
+            try:
+                import imageio_ffmpeg
+                _FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:
+                raise RuntimeError("ffmpeg was not found. Run: pip install -r requirements.txt")
+    return _FFMPEG
+
 
 def probe_duration(path: Path) -> float:
     """Duration in seconds. Decodes the file because chunked WebM has no duration header."""
     out = subprocess.run(
-        ["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-f", "null", "-", "-stats_period", "3600", "-progress", "pipe:1"],
+        [ffmpeg(), "-nostdin", "-v", "error", "-i", str(path), "-f", "null", "-", "-stats_period", "3600", "-progress", "pipe:1"],
         capture_output=True, text=True,
     )
     seconds = 0.0
@@ -212,7 +228,7 @@ def split_audio(path: Path, workdir: Path, segment_seconds: int | None = None,
     max_seconds = max_seconds or MAX_MINUTES * 60
     pattern = workdir / "part_%03d.mp3"
     cmd = [
-        "ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(path), "-t", str(max_seconds),
+        ffmpeg(), "-nostdin", "-v", "error", "-y", "-i", str(path), "-t", str(max_seconds),
         "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "48k",
         "-f", "segment", "-segment_time", str(segment_seconds), "-reset_timestamps", "1",
         str(pattern),

@@ -42,7 +42,7 @@ cp .env.example .env        # then paste your keys into .env
 python app.py               # http://localhost:8000
 ```
 
-You also need `ffmpeg` on your PATH (`winget install ffmpeg`, `brew install ffmpeg` or `apt install ffmpeg`).
+ffmpeg comes with the Python packages (`imageio-ffmpeg`), so there's nothing extra to install. If ffmpeg is already on your PATH, that copy is used instead.
 
 Open **http://localhost:8000 in Chrome or Edge**. Tab-audio capture only works in Chromium browsers, and only on `localhost` or over HTTPS.
 

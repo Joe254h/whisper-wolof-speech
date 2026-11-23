@@ -54,7 +54,7 @@ class FakeWriter:
 
 def make_audio(path: Path, seconds: int, fmt_args=("-c:a", "libopus", "-b:a", "32k")):
     subprocess.run(
-        ["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", f"sine=frequency=330:duration={seconds}",
+        [services.ffmpeg(), "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", f"sine=frequency=330:duration={seconds}",
          "-ac", "1", *fmt_args, str(path)],
         check=True,
     )
