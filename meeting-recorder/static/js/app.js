@@ -262,11 +262,11 @@ async function startRecording() {
   setNotice(notice, "");
 
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-    setNotice(notice, "This browser cannot capture another tab. Open ICPAC Minutes in Chrome or Edge on a computer.", "error");
+    setNotice(notice, `This browser cannot capture another tab. Open ${document.title} in Chrome or Edge on a computer.`, "error");
     return;
   }
   if (!window.isSecureContext) {
-    setNotice(notice, "Capture needs a secure page. Open ICPAC Minutes on https:// or http://localhost.", "error");
+    setNotice(notice, `Capture needs a secure page. Open ${document.title} on https:// or http://localhost.`, "error");
     return;
   }
   const mime = pickMime();

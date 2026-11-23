@@ -53,7 +53,11 @@ def create_app(data_dir: Path | None = None, transcriber=None, writer=None) -> F
     # pages --------------------------------------------------------------------
     @app.get("/")
     def index():
-        return render_template("index.html", max_minutes=MAX_MINUTES)
+        # APP_NAME in .env renames the app; the first word is shown bold in the top bar.
+        name = os.environ.get("APP_NAME", "").strip() or "ICPAC Minutes"
+        first, _, rest = name.partition(" ")
+        return render_template("index.html", max_minutes=MAX_MINUTES, app_name=name,
+                               name_first=first, name_rest=rest)
 
     @app.get("/health")
     def health():

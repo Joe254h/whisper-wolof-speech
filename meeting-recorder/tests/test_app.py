@@ -185,8 +185,12 @@ def test_bad_ids_and_unsupported_upload(env):
     assert r.status_code == 400
 
 
-def test_index_and_config(env):
+def test_index_and_config(env, monkeypatch):
     client, *_ = env
+    monkeypatch.setenv("APP_NAME", "ICPAC Hindcast")
+    page = client.get("/").data.decode()
+    assert "<title>ICPAC Hindcast</title>" in page and 'ICPAC <span>Hindcast</span>' in page
+    monkeypatch.delenv("APP_NAME")
     assert b"Share meeting tab and start" in client.get("/").data
     cfg = client.get("/api/config").get_json()
     assert cfg["languages"] == {"en": "English", "sw": "Kiswahili"} and cfg["max_minutes"] == 60
