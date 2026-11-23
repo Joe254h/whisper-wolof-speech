@@ -285,3 +285,51 @@ def test_groq_request_shape_and_no_retry_when_out_of_credit(tmp_path, monkeypatc
     with pytest.raises(RuntimeError, match="no credits"):
         t.transcribe(piece, "sw")
     assert len(sent) == 2  # out-of-credit 429 fails at once instead of retrying
+
+
+def test_meta_writes_survive_a_file_briefly_locked(tmp_path, monkeypatch):
+    """Simulates Windows refusing to replace meta.json while it is open elsewhere."""
+    store = services.Store(tmp_path)
+    meta = store.create("x", "en", "same", "live")
+    real = Path.replace
+    failures = {"n": 3}
+
+    def flaky(self, target):
+        if failures["n"] > 0:
+            failures["n"] -= 1
+            raise PermissionError(5, "Access is denied")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky)
+    assert store.update(meta["id"], stage="Transcribing")["stage"] == "Transcribing"
+    assert store.load(meta["id"])["stage"] == "Transcribing"
+    assert not list((tmp_path / "sessions" / meta["id"]).glob("*.tmp"))
+
+
+def test_concurrent_polling_and_updates(tmp_path):
+    import threading
+
+    store = services.Store(tmp_path)
+    sid = store.create("x", "en", "same", "live")["id"]
+    errors = []
+
+    def writer():
+        for i in range(300):
+            try:
+                store.update(sid, progress=i / 300)
+            except Exception as e:  # pragma: no cover
+                errors.append(e)
+
+    def reader():
+        for _ in range(300):
+            try:
+                store.load(sid)
+                store.list()
+            except Exception as e:  # pragma: no cover
+                errors.append(e)
+
+    threads = [threading.Thread(target=writer), threading.Thread(target=writer),
+               threading.Thread(target=reader), threading.Thread(target=reader)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert errors == []

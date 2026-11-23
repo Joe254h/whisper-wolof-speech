@@ -60,6 +60,18 @@ The next meeting date or follow-up, if mentioned.
 # --------------------------------------------------------------------------- storage
 
 
+def _replace_with_retry(src: Path, dst: Path, attempts: int = 20) -> None:
+    """os.replace, retried briefly: antivirus or the Windows search indexer can hold a file for a moment."""
+    for i in range(attempts):
+        try:
+            src.replace(dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(0.05 * (i + 1))
+
+
 class Store:
     """One folder per session: meta.json, audio.webm, transcript.json, report.md."""
 
@@ -121,18 +133,23 @@ class Store:
         self.save(meta)
         return meta
 
+    # Reads and writes of meta.json share one lock. On Windows a file cannot be replaced
+    # while another thread has it open, so a status poll reading meta.json during a
+    # progress update used to fail the whole job with "[WinError 5] Access is denied".
     def load(self, sid: str) -> dict:
         path = self.dir(sid) / "meta.json"
-        if not path.exists():
-            raise KeyError(sid)
-        return json.loads(path.read_text(encoding="utf-8"))
+        with self._lock:
+            if not path.exists():
+                raise KeyError(sid)
+            return json.loads(path.read_text(encoding="utf-8"))
 
     def save(self, meta: dict) -> dict:
         meta["updated_at"] = time.time()
         path = self.dir(meta["id"]) / "meta.json"
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        tmp = path.with_name(f"meta.{threading.get_ident()}.tmp")
+        with self._lock:
+            tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            _replace_with_retry(tmp, path)
         return meta
 
     def update(self, sid: str, **fields) -> dict:
@@ -143,11 +160,12 @@ class Store:
 
     def list(self) -> list[dict]:
         items = []
-        for path in self.sessions.glob("*/meta.json"):
-            try:
-                items.append(json.loads(path.read_text(encoding="utf-8")))
-            except (OSError, json.JSONDecodeError):
-                continue
+        with self._lock:
+            for path in self.sessions.glob("*/meta.json"):
+                try:
+                    items.append(json.loads(path.read_text(encoding="utf-8")))
+                except (OSError, json.JSONDecodeError):
+                    continue
         return sorted(items, key=lambda m: m["created_at"], reverse=True)
 
     def delete(self, sid: str) -> None:
