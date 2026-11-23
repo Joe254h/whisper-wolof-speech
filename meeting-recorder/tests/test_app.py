@@ -198,3 +198,54 @@ def test_recording_longer_than_limit_is_trimmed_not_rejected(env, monkeypatch):
     assert s["status"] == "done", s["error"]
     assert s["duration_seconds"] == 60
     assert len(transcriber.calls) == 2  # 0-40 s and 40-60 s; nothing past the limit
+
+
+def test_upload_longer_than_limit_is_refused_immediately(env, monkeypatch):
+    client, transcriber, writer, tmp = env
+    monkeypatch.setattr(services, "MAX_MINUTES", 1)
+    mp3 = tmp / "long.mp3"
+    make_audio(mp3, 120, ("-c:a", "libmp3lame", "-b:a", "32k"))
+    with open(mp3, "rb") as fh:
+        r = client.post("/api/sessions/upload", data={"audio": (fh, "long.mp3"), "language": "en"},
+                        content_type="multipart/form-data")
+    assert r.status_code == 400 and "2 minutes long" in r.get_json()["error"]
+    assert client.get("/api/sessions").get_json()["sessions"] == []
+    assert transcriber.calls == []
+
+
+def test_pieces_are_transcribed_in_parallel_and_kept_in_order(tmp_path, monkeypatch):
+    import threading
+
+    monkeypatch.setattr(services, "SEGMENT_SECONDS", 60)
+
+    class SlowParallel(FakeTranscriber):
+        parallel = True
+
+        def __init__(self):
+            super().__init__()
+            self.active = 0
+            self.peak = 0
+            self.lock = threading.Lock()
+
+        def transcribe(self, path, language):
+            idx = int(Path(path).stem.split("_")[1])
+            with self.lock:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+            time.sleep(0.6 - idx * 0.1)  # later pieces finish first
+            with self.lock:
+                self.active -= 1
+            return [services.Segment(1.0, 2.0, f"piece {idx}")]
+
+    t = SlowParallel()
+    client = create_app(tmp_path / "d", transcriber=t, writer=FakeWriter()).test_client()
+    mp3 = tmp_path / "m.mp3"
+    make_audio(mp3, 300, ("-c:a", "libmp3lame", "-b:a", "32k"))
+    with open(mp3, "rb") as fh:
+        sid = client.post("/api/sessions/upload", data={"audio": (fh, "m.mp3"), "language": "en"},
+                          content_type="multipart/form-data").get_json()["id"]
+    s = wait_done(client, sid)
+    assert s["status"] == "done", s["error"]
+    assert t.peak == 5
+    assert [seg["text"] for seg in s["transcript"]] == [f"piece {i}" for i in range(5)]
+    assert [seg["start"] for seg in s["transcript"]] == [1, 61, 121, 181, 241]

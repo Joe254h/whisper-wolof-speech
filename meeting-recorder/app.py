@@ -17,13 +17,16 @@ from flask import Flask, Response, jsonify, render_template, request, send_file 
 import services  # noqa: E402
 from services import LANGUAGES, MAX_MINUTES, REPORT_LANGUAGES, Processor, Store  # noqa: E402
 
+# MAX_MINUTES is re-read from services at request time so tests can change it.
+
 UPLOAD_EXTENSIONS = {".webm", ".ogg", ".wav", ".mp3", ".m4a", ".mp4", ".flac", ".aac"}
 CHUNK_LIMIT = 8 * 1024 * 1024
 
 
 def create_app(data_dir: Path | None = None, transcriber=None, writer=None) -> Flask:
     app = Flask(__name__)
-    app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "200")) * 1024 * 1024
+    # An hour of uncompressed stereo WAV is about 700 MB, so allow up to 1 GB.
+    app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "1024")) * 1024 * 1024
 
     store = Store(data_dir or Path(os.environ.get("DATA_DIR", BASE_DIR / "data")))
     processor = Processor(store, transcriber, writer)
@@ -109,7 +112,16 @@ def create_app(data_dir: Path | None = None, transcriber=None, writer=None) -> F
         meta = store.update(meta["id"], audio_ext=ext)
         path = store.audio_path(meta["id"])
         file.save(path)
-        store.update(meta["id"], audio_bytes=path.stat().st_size)
+        try:
+            duration = services.probe_duration(path)
+        except RuntimeError:
+            store.delete(meta["id"])
+            return jsonify({"error": "That file has no audio Kikao can read. Try MP3, M4A or WAV."}), 400
+        if duration > services.MAX_MINUTES * 60 + 30:
+            store.delete(meta["id"])
+            return jsonify({"error": f"That recording is {round(duration / 60)} minutes long. "
+                                     f"Upload one that is {services.MAX_MINUTES} minutes or shorter."}), 400
+        store.update(meta["id"], audio_bytes=path.stat().st_size, duration_seconds=round(duration, 1))
         processor.submit(meta["id"], model=request.form.get("model") or None)
         return jsonify(public(store.load(meta["id"]))), 201
 

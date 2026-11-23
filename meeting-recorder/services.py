@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +21,8 @@ LANGUAGES = {"en": "English", "sw": "Kiswahili"}
 REPORT_LANGUAGES = {"same": "Same as meeting", "en": "English", "sw": "Kiswahili"}
 MAX_MINUTES = int(os.environ.get("MAX_RECORDING_MINUTES", "60"))
 SEGMENT_SECONDS = int(os.environ.get("SEGMENT_SECONDS", "600"))  # 10-minute pieces stay far below 25 MB
+# How many pieces are sent to Whisper at once. 6 covers a full hour in a single round.
+TRANSCRIBE_PARALLEL = int(os.environ.get("TRANSCRIBE_PARALLEL", "6"))
 
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
@@ -254,6 +258,7 @@ class Segment:
 
 class OpenAITranscriber:
     name = "openai"
+    parallel = True
 
     def __init__(self):
         self.api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -292,6 +297,7 @@ class LocalTranscriber:
     """faster-whisper on this machine. Slow on CPU: budget roughly real time with 'small'."""
 
     name = "local"
+    parallel = False  # one model in memory; pieces run one after another
 
     def __init__(self):
         self.model_name = os.environ.get("LOCAL_WHISPER_MODEL", "small")
@@ -443,23 +449,43 @@ class Processor:
         if not audio.exists() or audio.stat().st_size == 0:
             raise RuntimeError("No audio was recorded for this meeting.")
         self.store.update(sid, status="transcribing", stage="Preparing audio", progress=0.02)
-        # Anything past the limit (e.g. a long upload) is trimmed rather than rejected.
-        duration = min(probe_duration(audio), MAX_MINUTES * 60)
+        # Uploads were measured when they arrived; live recordings are measured here.
+        # Anything past the limit is trimmed rather than rejected.
+        duration = meta.get("duration_seconds") or probe_duration(audio)
+        duration = min(duration, MAX_MINUTES * 60)
         self.store.update(sid, duration_seconds=round(duration, 1))
+        seg_len = SEGMENT_SECONDS
+
+        with tempfile.TemporaryDirectory() as tmp:
+            parts = split_audio(audio, Path(tmp), seg_len, MAX_MINUTES * 60)
+            # Encoder padding can leave a sliver past the real end; Whisper tends to invent
+            # text for near-silent clips, so keep only pieces that hold at least a second.
+            needed = max(1, math.ceil((duration - 1) / seg_len))
+            parts = parts[:needed]
+            total = len(parts)
+            results: dict[int, list] = {}
+            workers = min(TRANSCRIBE_PARALLEL, total) if getattr(self.transcriber, "parallel", False) else 1
+
+            def label(done):
+                return (f"Transcribing {total} parts at once ({done} of {total} done)" if workers > 1
+                        else f"Transcribing part {min(done + 1, total)} of {total}")
+
+            self.store.update(sid, stage=label(0), progress=0.08)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(self.transcriber.transcribe, part, meta["language"]): i
+                           for i, part in enumerate(parts)}
+                for fut in as_completed(futures):
+                    results[futures[fut]] = fut.result()  # re-raises the first failure
+                    done = len(results)
+                    self.store.update(sid, stage=label(done), progress=0.08 + 0.8 * done / total)
 
         segments: list[dict] = []
-        with tempfile.TemporaryDirectory() as tmp:
-            parts = split_audio(audio, Path(tmp), SEGMENT_SECONDS, MAX_MINUTES * 60)
-            for i, part in enumerate(parts):
-                self.store.update(
-                    sid, stage=f"Transcribing part {i + 1} of {len(parts)}",
-                    progress=0.05 + 0.8 * i / len(parts),
-                )
-                offset = i * SEGMENT_SECONDS
-                for seg in self.transcriber.transcribe(part, meta["language"]):
-                    start = offset + seg.start
-                    end = offset + (seg.end or (SEGMENT_SECONDS if seg.start == 0 else seg.start))
-                    segments.append({"start": round(start, 2), "end": round(end, 2), "text": seg.text})
+        for i in range(total):
+            offset = i * seg_len
+            for seg in results[i]:
+                start = offset + seg.start
+                end = offset + (seg.end or (seg_len if seg.start == 0 else seg.start))
+                segments.append({"start": round(start, 2), "end": round(end, 2), "text": seg.text})
         if not any(s["text"] for s in segments):
             raise RuntimeError("Whisper heard no speech. Check that meeting audio was shared.")
         self.store.write_json(sid, "transcript.json", segments)

@@ -21,7 +21,8 @@ Your microphone  ──┘                                                   │
 - **Languages.** Only `en` and `sw` are accepted, and Whisper is told the language explicitly instead of guessing. The report can be written in the meeting's language, in English, or in Kiswahili.
 - **Report format.** Open *Report template* to edit the Markdown template. The model keeps your headings, order and tables. `{{title}}`, `{{date}}` and `{{language}}` are filled in for you. You can also choose the OpenRouter model there.
 - **Outputs.** Rendered report, edit in place, copy as Markdown, download `.md`, save as PDF through the print dialog, timestamped transcript with click-to-play, `.txt` and audio downloads.
-- **Uploads.** You can also upload an existing recording (MP3, M4A, WAV, WebM, MP4 and more).
+- **Uploads.** You can also upload an existing recording up to 60 minutes long and 1 GB in size (MP3, M4A, WAV, WebM, MP4 and more). A longer file is refused before it uploads.
+- **Speed.** The audio is cut into 10-minute pieces and all of them go to Whisper at the same time, so an hour-long meeting takes about as long as one 10-minute piece. Change this with `TRANSCRIBE_PARALLEL`.
 
 ## Keys you need
 

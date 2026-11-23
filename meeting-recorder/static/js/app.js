@@ -449,10 +449,35 @@ function setRecordingUI(on) {
 
 let pickedFile = null;
 
-function pickFile(file) {
+// Reads the length from the file itself so an over-long recording is refused before uploading.
+function fileDuration(file) {
+  return new Promise((resolve) => {
+    const el = document.createElement("audio");
+    const url = URL.createObjectURL(file);
+    const done = (v) => { URL.revokeObjectURL(url); resolve(v); };
+    el.preload = "metadata";
+    el.onloadedmetadata = () => done(Number.isFinite(el.duration) ? el.duration : null);
+    el.onerror = () => done(null);
+    setTimeout(() => done(null), 8000);
+    el.src = url;
+  });
+}
+
+async function pickFile(file) {
+  const maxMin = state.config ? state.config.max_minutes : 60;
+  if (file) {
+    const secs = await fileDuration(file);
+    if (secs && secs > maxMin * 60 + 30) {
+      setNotice($("#uploadNotice"), `That recording is ${Math.round(secs / 60)} minutes long. Choose one that is ${maxMin} minutes or shorter.`, "error");
+      $("#fileInput").value = "";
+      file = null;
+    } else {
+      setNotice($("#uploadNotice"), secs ? `${fmtDuration(secs)} of audio. Ready to transcribe.` : "");
+    }
+  }
   pickedFile = file || null;
   $("#dropzone").classList.toggle("has-file", !!file);
-  $("#dropSub").textContent = file ? `${file.name} · ${(file.size / 1048576).toFixed(1)} MB` : "MP3, M4A, WAV, WebM or MP4 up to 60 minutes";
+  $("#dropSub").textContent = file ? `${file.name} · ${(file.size / 1048576).toFixed(1)} MB` : "MP3, M4A, WAV, WebM or MP4, up to 60 minutes";
   $("#uploadBtn").disabled = !file;
   if (file && !$("#title").value.trim()) $("#title").value = file.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ");
 }
