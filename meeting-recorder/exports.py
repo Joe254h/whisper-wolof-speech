@@ -10,11 +10,11 @@ import xml.etree.ElementTree as ET
 
 import markdown as mdlib
 
-INK = (0x16, 0x20, 0x3B)
+INK = (0x1B, 0x17, 0x30)
 MUTED = (0x5B, 0x66, 0x80)
 TEAL = (0x13, 0x8A, 0x7A)
-RED = (0xE0, 0x39, 0x3E)
-PAPER = (0xF4, 0xF6, 0xFA)
+RED = (0xFF, 0x5A, 0x4E)
+PAPER = (0xF4, 0xF2, 0xF8)
 LINE = (0xD6, 0xDC, 0xE7)
 FONT = "Segoe UI"
 
@@ -452,7 +452,7 @@ def slides_pptx(deck: dict) -> bytes:
          anchor=MSO_ANCHOR.BOTTOM)
     bar = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.9), Inches(4.95), Inches(1.1), Inches(0.07))
     bar.fill.solid()
-    bar.fill.fore_color.rgb = rgb((0x63, 0xD0, 0xC8))
+    bar.fill.fore_color.rgb = rgb((0x3C, 0xC6, 0xB5))
     bar.line.fill.background()
     text(s, Inches(0.9), Inches(5.25), Inches(11.4), Inches(0.8), deck.get("subtitle", ""), 18, (0xC9, 0xD0, 0xE3))
     text(s, Inches(0.9), Inches(6.6), Inches(11.4), Inches(0.4), "About two minutes to read", 12,

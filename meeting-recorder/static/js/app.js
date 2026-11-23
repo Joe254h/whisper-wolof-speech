@@ -127,10 +127,13 @@ const tape = {
     }
   },
   elapsed: 0,
+  // The hour dial: time runs clockwise from 12 o'clock. Meeting audio grows outward
+  // from the centre line, your microphone grows inward, like a waveform wrapped round a clock.
   draw() {
     const c = this.canvas;
     const dpr = window.devicePixelRatio || 1;
     const w = c.clientWidth, h = c.clientHeight;
+    if (!w || !h) return;
     if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
       c.width = Math.round(w * dpr);
       c.height = Math.round(h * dpr);
@@ -140,68 +143,89 @@ const tape = {
     ctx.clearRect(0, 0, w, h);
 
     const css = getComputedStyle(document.documentElement);
-    const grid = css.getPropertyValue("--tape-grid").trim();
-    const text = css.getPropertyValue("--tape-text").trim();
-    const colMeet = css.getPropertyValue("--lane-meet").trim();
-    const colMe = css.getPropertyValue("--lane-me").trim();
+    const v = (n) => css.getPropertyValue(n).trim();
+    const colMeet = v("--meet"), colMe = v("--me"), colRec = v("--rec");
+    const track = v("--dial-track"), tickCol = v("--dial-tick"), text = v("--muted");
     const total = (state.config ? state.config.max_minutes : 60) * 60;
-
-    const labelH = 18;
-    const laneGap = 10;
-    const laneH = (h - labelH - laneGap) / 2;
-    const lanes = [
-      { y: 0, data: this.meet, color: colMeet },
-      { y: laneH + laneGap, data: this.me, color: colMe },
-    ];
-
-    // minute grid: a tick per 5 minutes, labels every 10
-    ctx.font = `500 11px ${css.getPropertyValue("--sans")}`;
-    ctx.textBaseline = "bottom";
-    // About 12 gridlines and 6 labels whatever the limit (60 min: 5/10, 180 min: 15/30).
     const mins = total / 60;
-    const tick = [5, 10, 15, 30, 60].find((t) => mins / t <= 13) || 60;
-    for (let m = 0; m <= mins; m += tick) {
-      const x = Math.round((m * 60 / total) * (w - 1)) + 0.5;
-      ctx.strokeStyle = grid;
-      ctx.lineWidth = 1;
+
+    const size = Math.min(w, h);
+    const cx = w / 2, cy = h / 2;
+    const R = size / 2 - (size < 360 ? 22 : 30);   // tick ring
+    const mid = R * 0.76;                           // the line both lanes grow from
+    const outMax = R - 10 - mid;                    // meeting bars, outward
+    const inMax = mid - R * 0.6;                    // microphone bars, inward
+    const start = -Math.PI / 2;
+    const ang = (t) => start + (t / total) * Math.PI * 2;
+
+    // minute ticks and labels
+    const tick = [5, 10, 15, 30, 60].find((t) => mins / t <= 12) || 60;
+    const label = mins <= 60 ? 15 : mins <= 120 ? 30 : 60;
+    ctx.font = `600 ${size < 360 ? 10 : 11}px ${v("--ui")}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (let m = 0; m < mins; m += 1) {
+      const major = m % tick === 0;
+      if (!major && (mins > 60 || m % 1 !== 0)) continue;
+      const a = ang(m * 60);
+      const r1 = major ? R - 7 : R - 3;
+      ctx.strokeStyle = major ? tickCol : track;
+      ctx.lineWidth = major ? 2 : 1;
       ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h - labelH);
+      ctx.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
+      ctx.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R);
       ctx.stroke();
-      const every = tick * (w < 560 ? 4 : 2);
-      if (m % every === 0) {
-        const last = m + tick > mins;
+      if (m % label === 0) {
+        const lr = R + (size < 360 ? 12 : 16);
         ctx.fillStyle = text;
-        ctx.textAlign = m === 0 ? "left" : last ? "right" : "center";
-        ctx.fillText(m === 0 ? "0" : w < 560 && !last ? `${m}` : `${m} min`, x, h);
+        ctx.fillText(m === 0 ? `0` : `${m}`, cx + Math.cos(a) * lr, cy + Math.sin(a) * lr);
       }
     }
 
-    // lane baselines + level bars, one column per pixel
-    for (const lane of lanes) {
-      const mid = lane.y + laneH / 2;
-      ctx.strokeStyle = grid;
+    // the base line, then one bar per bin
+    ctx.strokeStyle = track;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, mid, 0, Math.PI * 2);
+    ctx.stroke();
+
+    const bins = size < 360 ? 180 : 240;
+    const per = total / bins;
+    const until = Math.min(this.elapsed, total);
+    ctx.lineCap = "round";
+    ctx.lineWidth = Math.max(1.5, ((Math.PI * 2 * mid) / bins) * 0.5);
+    for (let i = 0; i * per < until; i++) {
+      let pm = 0, pe = 0;
+      const lo = Math.floor(i * per), hi = Math.min(Math.ceil((i + 1) * per), this.meet.length);
+      for (let k = lo; k < hi; k++) {
+        if (this.meet[k] > pm) pm = this.meet[k];
+        if (this.me[k] > pe) pe = this.me[k];
+      }
+      const a = ang((i + 0.5) * per), ca = Math.cos(a), sa = Math.sin(a);
+      ctx.strokeStyle = colMeet;
       ctx.beginPath();
-      ctx.moveTo(0, mid + 0.5);
-      ctx.lineTo(w, mid + 0.5);
+      ctx.moveTo(cx + ca * (mid + 2), cy + sa * (mid + 2));
+      ctx.lineTo(cx + ca * (mid + 2 + Math.max(1, pm * outMax)), cy + sa * (mid + 2 + Math.max(1, pm * outMax)));
       ctx.stroke();
-      ctx.fillStyle = lane.color;
-      const until = Math.min(this.elapsed, total);
-      const pxEnd = Math.floor((until / total) * w);
-      for (let px = 0; px < pxEnd; px++) {
-        const a = Math.floor((px / w) * total), b = Math.max(a + 1, Math.floor(((px + 1) / w) * total));
-        let peak = 0;
-        for (let i = a; i < b && i < lane.data.length; i++) peak = Math.max(peak, lane.data[i]);
-        const amp = Math.max(1, peak * (laneH / 2 - 2));
-        ctx.fillRect(px, mid - amp, 1, amp * 2);
-      }
+      ctx.strokeStyle = colMe;
+      ctx.beginPath();
+      ctx.moveTo(cx + ca * (mid - 2), cy + sa * (mid - 2));
+      ctx.lineTo(cx + ca * (mid - 2 - Math.max(1, pe * inMax)), cy + sa * (mid - 2 - Math.max(1, pe * inMax)));
+      ctx.stroke();
     }
 
-    // playhead
-    if (this.elapsed > 0) {
-      const x = Math.min(w - 1, (this.elapsed / total) * w);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(Math.round(x), 0, 2, h - labelH);
+    // elapsed arc on the tick ring and the hand
+    if (until > 0) {
+      ctx.strokeStyle = colRec;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(cx, cy, R + 1, start, ang(until));
+      ctx.stroke();
+      const a = ang(until);
+      ctx.fillStyle = colRec;
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(a) * (R + 1), cy + Math.sin(a) * (R + 1), 5, 0, Math.PI * 2);
+      ctx.fill();
     }
   },
   reset() {
@@ -215,6 +239,7 @@ const tape = {
 window.addEventListener("resize", () => tape.draw());
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") tape.draw(); });
 matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => tape.draw());
+if (window.ResizeObserver) new ResizeObserver(() => tape.draw()).observe($("#tapeCanvas"));
 
 // ---------------------------------------------------------------- live recording
 
@@ -454,6 +479,8 @@ function setRecordingUI(on) {
   $("#stopBtn").disabled = false;
   $("#recState").classList.toggle("live", on);
   $("#recStateText").textContent = on ? "Recording" : "Ready";
+  $("#dialLabel").textContent = on ? "Stop and write report" : "Share tab and start";
+  $("#tape").classList.toggle("live", on);
   for (const el of $$("#setupForm input, #setupForm select, #includeMic, .mode")) el.disabled = on;
 }
 
@@ -581,14 +608,14 @@ function schedulePoll() {
 
 // ---------------------------------------------------------------- detail
 
-async function selectSession(id) {
+async function selectSession(id, scroll = true) {
   if (!id) return;
   if (state.selectedId !== id) deckState.index = 0;
   state.selectedId = id;
   state.editing = false;
   renderList();
   await loadSelected(true);
-  if (window.innerWidth < 900) $("#detail").scrollIntoView({ behavior: "smooth", block: "start" });
+  if (scroll && window.innerWidth < 900) $("#detail").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function loadSelected(fresh = false) {
@@ -958,6 +985,7 @@ function switchMode(live) {
   $("#tabUpload").setAttribute("aria-selected", !live);
   $("#liveMode").hidden = !live;
   $("#uploadMode").hidden = live;
+  for (const el of $$(".live-only")) el.hidden = !live;
   if (live) tape.draw();
 }
 
@@ -1054,5 +1082,5 @@ $("#resetTemplate").addEventListener("click", resetTemplate);
   await loadConfig();
   tape.draw();
   await refreshSessions();
-  if (state.sessions[0]) selectSession(state.sessions[0].id);
+  if (state.sessions[0]) selectSession(state.sessions[0].id, false);
 })();

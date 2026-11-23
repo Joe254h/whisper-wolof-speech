@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Kikao · Meeting reports</title>
   <meta name="description" content="Record a Teams or Google Meet meeting, transcribe it with Whisper in English or Kiswahili, and get a formatted report and slides.">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%2316203B'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%23E0393E'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23171329'/%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%233CC6B5' stroke-width='2' stroke-dasharray='3 2'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23FF5A4E'/%3E%3C/svg%3E">
+  <meta name="theme-color" content="#120f22">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,650;12..96,800&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Figtree:wght@400;500;600;700&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 </head>
 <body>
@@ -47,96 +48,91 @@
   </header>
 
   <main>
-    <!-- Studio ------------------------------------------------------------- -->
-    <section class="studio card" aria-labelledby="studioTitle">
-      <div class="studio-head">
-        <div>
-          <h1 id="studioTitle">Record a meeting, get the minutes.</h1>
-          <p class="lede">English or Kiswahili, up to {{ max_minutes }} minutes. A report, slides and a full transcript when it ends.</p>
-        </div>
+    <!-- Console --------------------------------------------------------------- -->
+    <section class="console" aria-labelledby="studioTitle">
+      <div class="console-side">
+        <h1 id="studioTitle">Every meeting, minuted.</h1>
+        <p class="lede">Record a Teams or Meet call in English or Kiswahili, up to {{ max_minutes }} minutes. Kikao writes the report, the slides and the full transcript.</p>
+
         <div class="modes" role="tablist" aria-label="How to add a meeting">
           <button role="tab" aria-selected="true" aria-controls="liveMode" id="tabLive" class="mode active" type="button"><svg class="ic"><use href="#i-mic"/></svg>Record live</button>
-          <button role="tab" aria-selected="false" aria-controls="uploadMode" id="tabUpload" class="mode" type="button"><svg class="ic"><use href="#i-upload"/></svg>Upload</button>
-        </div>
-      </div>
-
-      <form class="setup" id="setupForm" autocomplete="off" onsubmit="return false">
-        <label class="field grow">
-          <span>Meeting title</span>
-          <input id="title" type="text" maxlength="140" placeholder="Weekly project sync">
-        </label>
-        <fieldset class="field">
-          <legend>Spoken language</legend>
-          <div class="segmented" id="language">
-            <label><input type="radio" name="language" value="en" checked><span>English</span></label>
-            <label><input type="radio" name="language" value="sw"><span>Kiswahili</span></label>
-          </div>
-        </fieldset>
-        <label class="field">
-          <span>Write report in</span>
-          <select id="reportLanguage">
-            <option value="same">Same as meeting</option>
-            <option value="en">English</option>
-            <option value="sw">Kiswahili</option>
-          </select>
-        </label>
-      </form>
-
-      <!-- Live recording -->
-      <div id="liveMode" role="tabpanel" aria-labelledby="tabLive">
-        <div class="tape" id="tape">
-          <div class="tape-readout">
-            <div>
-              <div class="clock" id="clock">00:00</div>
-              <div class="clock-sub" id="clockSub">of {{ max_minutes }}:00 available</div>
-            </div>
-            <div class="rec-state" id="recState"><span class="dot"></span><span id="recStateText">Ready</span></div>
-          </div>
-          <canvas id="tapeCanvas" height="150" aria-label="Audio levels for the meeting and your microphone over the hour"></canvas>
-          <div class="lanes-key" aria-hidden="true">
-            <span class="key meet">Meeting audio</span>
-            <span class="key me">Your microphone</span>
-          </div>
+          <button role="tab" aria-selected="false" aria-controls="uploadMode" id="tabUpload" class="mode" type="button"><svg class="ic"><use href="#i-upload"/></svg>Upload a file</button>
         </div>
 
-        <div class="controls">
-          <label class="switch">
-            <input type="checkbox" id="includeMic" checked>
-            <span class="track" aria-hidden="true"></span>
-            <span>Include my microphone</span>
+        <form class="setup" id="setupForm" autocomplete="off" onsubmit="return false">
+          <label class="field">
+            <span>Meeting title</span>
+            <input id="title" type="text" maxlength="140" placeholder="Weekly project sync">
           </label>
-          <div class="control-buttons">
-            <button class="btn record" id="startBtn" type="button"><span class="rec-icon" aria-hidden="true"></span>Share meeting tab and start</button>
-            <button class="btn stop" id="stopBtn" type="button" hidden><span class="stop-icon" aria-hidden="true"></span>Stop and write report</button>
-          </div>
-        </div>
-        <p class="notice" id="liveNotice" role="status"></p>
+          <fieldset class="field">
+            <legend>Spoken language</legend>
+            <div class="segmented" id="language">
+              <label><input type="radio" name="language" value="en" checked><span><b>EN</b>English</span></label>
+              <label><input type="radio" name="language" value="sw"><span><b>SW</b>Kiswahili</span></label>
+            </div>
+          </fieldset>
+          <label class="field">
+            <span>Write the report in</span>
+            <select id="reportLanguage">
+              <option value="same">Same language as the meeting</option>
+              <option value="en">English</option>
+              <option value="sw">Kiswahili</option>
+            </select>
+          </label>
+        </form>
 
-        <details class="howto">
+        <label class="switch live-only">
+          <input type="checkbox" id="includeMic" checked>
+          <span class="track" aria-hidden="true"></span>
+          <span>Include my microphone</span>
+        </label>
+
+        <details class="howto live-only">
           <summary>How to capture Teams or Google Meet</summary>
           <ol>
             <li>Join the meeting in <strong>Chrome or Edge</strong> in another tab (Meet, or Teams on the web).</li>
-            <li>Press <em>Share meeting tab and start</em>, pick the meeting tab, and keep <strong>Also share tab audio</strong> switched on.</li>
-            <li>Leave this tab open. Audio is saved to the server every 15 seconds, so a dropped connection loses very little.</li>
-            <li>Using the Teams desktop app? Choose <em>Entire screen</em> and tick <strong>Share system audio</strong> (Windows only). On macOS, join the meeting from the browser instead.</li>
+            <li>Press the record button, pick the meeting tab, and keep <strong>Also share tab audio</strong> switched on.</li>
+            <li>Leave this tab open. Audio is saved every 15 seconds, so a dropped connection loses very little.</li>
+            <li>Teams desktop app: choose <em>Entire screen</em> and tick <strong>Share system audio</strong> (Windows only).</li>
           </ol>
           <p>Recording stops by itself after {{ max_minutes }} minutes. Let the other participants know the meeting is being recorded.</p>
         </details>
       </div>
 
-      <!-- Upload -->
-      <div id="uploadMode" role="tabpanel" aria-labelledby="tabUpload" hidden>
-        <label class="dropzone" id="dropzone">
-          <input type="file" id="fileInput" accept=".webm,.ogg,.wav,.mp3,.m4a,.mp4,.flac,.aac,audio/*,video/mp4">
-          <span class="drop-icon" aria-hidden="true"><svg class="ic"><use href="#i-upload"/></svg></span>
-          <span class="drop-title">Drop a meeting recording here, or choose a file</span>
-          <span class="drop-sub" id="dropSub">MP3, M4A, WAV, WebM or MP4, up to {{ max_minutes }} minutes</span>
-        </label>
-        <div class="controls">
-          <span></span>
-          <button class="btn primary" id="uploadBtn" type="button" disabled>Transcribe and write report</button>
+      <div class="console-main">
+        <!-- Live recording: the hour dial -->
+        <div id="liveMode" role="tabpanel" aria-labelledby="tabLive">
+          <div class="dial" id="tape">
+            <canvas id="tapeCanvas" aria-label="The recording so far, drawn around a clock face: meeting audio on the outer ring, your microphone on the inner ring"></canvas>
+            <div class="dial-center">
+              <div class="rec-state" id="recState"><span class="dot"></span><span id="recStateText">Ready</span></div>
+              <div class="clock" id="clock">00:00</div>
+              <div class="clock-sub" id="clockSub">of {{ max_minutes }}:00 available</div>
+              <button class="dial-btn record" id="startBtn" type="button" aria-label="Share meeting tab and start recording"><span class="rec-icon" aria-hidden="true"></span></button>
+              <button class="dial-btn stop" id="stopBtn" type="button" hidden aria-label="Stop and write report"><span class="stop-icon" aria-hidden="true"></span></button>
+              <span class="dial-label" id="dialLabel">Share tab and start</span>
+            </div>
+          </div>
+          <div class="lanes-key" aria-hidden="true">
+            <span class="key meet">Meeting audio</span>
+            <span class="key me">Your microphone</span>
+          </div>
+          <p class="notice" id="liveNotice" role="status"></p>
         </div>
-        <p class="notice" id="uploadNotice" role="status"></p>
+
+        <!-- Upload -->
+        <div id="uploadMode" role="tabpanel" aria-labelledby="tabUpload" hidden>
+          <label class="dropzone" id="dropzone">
+            <input type="file" id="fileInput" accept=".webm,.ogg,.wav,.mp3,.m4a,.mp4,.flac,.aac,audio/*,video/mp4">
+            <span class="drop-icon" aria-hidden="true"><svg class="ic"><use href="#i-upload"/></svg></span>
+            <span class="drop-title">Drop a recording here</span>
+            <span class="drop-sub" id="dropSub">MP3, M4A, WAV, WebM or MP4, up to {{ max_minutes }} minutes</span>
+          </label>
+          <div class="upload-actions">
+            <button class="btn primary" id="uploadBtn" type="button" disabled>Transcribe and write report</button>
+          </div>
+          <p class="notice" id="uploadNotice" role="status"></p>
+        </div>
       </div>
     </section>
 
