@@ -528,7 +528,10 @@ def deck_subtitle(meta: dict) -> str:
 class OpenRouterWriter:
     def __init__(self):
         self.api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-        self.model = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+        self.model = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash").strip()
+        # Without a cap OpenRouter reserves the model's maximum output (often 65k tokens) against
+        # your credit. A full report is about 2-4k tokens.
+        self.max_tokens = int(os.environ.get("OPENROUTER_MAX_TOKENS", "6000"))
 
     @property
     def ready(self) -> bool:
@@ -546,14 +549,20 @@ class OpenRouterWriter:
                     "Content-Type": "application/json",
                     "X-Title": "Kikao meeting reports",
                 },
-                json={"model": model, "messages": messages, "temperature": 0.2},
+                json={"model": model, "messages": messages, "temperature": 0.2, "max_tokens": self.max_tokens},
                 timeout=300,
             )
             if resp.status_code in (429, 500, 502, 503, 504) and attempt < 2:
                 time.sleep(2 ** attempt * 4)
                 continue
             if not resp.ok:
-                raise RuntimeError(f"OpenRouter request failed ({resp.status_code}): {_error_text(resp)}")
+                detail = _error_text(resp)
+                if resp.status_code == 402:
+                    raise RuntimeError(
+                        "OpenRouter needs more credit for this report. Add credit at openrouter.ai/settings/credits "
+                        "(a report costs about a cent), or raise this key's limit at openrouter.ai/keys, then press "
+                        f"Retry report. Details: {detail}")
+                raise RuntimeError(f"OpenRouter request failed ({resp.status_code}): {detail}")
             body = resp.json()
             try:
                 text = body["choices"][0]["message"]["content"].strip()

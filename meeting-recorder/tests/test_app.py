@@ -507,3 +507,23 @@ def test_misspelt_transcriber_and_padded_keys(monkeypatch):
     t = services.make_transcriber()
     assert t.name == "groq" and t.api_key == "gsk-x"
     assert services.OpenRouterWriter().api_key == "sk-or-x"
+
+
+def test_openrouter_caps_output_tokens(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-x")
+    sent = {}
+
+    class Resp:
+        status_code, ok, headers, text = 200, True, {}, ""
+
+        def json(self):
+            return {"model": "m", "choices": [{"message": {"content": "# R"}}]}
+
+    def fake_post(url, headers, json, timeout):
+        sent.update(json)
+        return Resp()
+
+    monkeypatch.setattr(services.requests, "post", fake_post)
+    w = services.OpenRouterWriter()
+    assert w.write([{"role": "user", "content": "x"}])[0] == "# R"
+    assert sent["max_tokens"] == 6000
