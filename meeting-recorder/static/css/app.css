@@ -40,7 +40,78 @@
   --r-sm: 8px;
   --shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 24px 60px -30px rgba(0, 0, 0, 0.8);
   --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.35), 0 30px 70px -20px rgba(0, 0, 0, 0.75);
+
+  --topbar-bg: rgba(18, 15, 34, 0.72);
+  --glow: rgba(120, 92, 255, 0.16);
+  --hover-line: rgba(236, 230, 255, 0.28);
+  --lift: 0 30px 60px -30px rgba(0, 0, 0, 0.9);
+  --stop-ring: rgba(243, 239, 250, 0.1);
   color-scheme: dark;
+}
+
+/* Light theme: the same console, printed on cool lavender-white. Used when the system
+   asks for light (unless the person picked dark), or when the person picked light. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f3f1f8;
+    --bg-2: #ebe8f3;
+    --surface: #ffffff;
+    --surface-2: #f4f2f9;
+    --surface-3: #e7e3f0;
+    --line: rgba(27, 23, 48, 0.1);
+    --line-strong: rgba(27, 23, 48, 0.2);
+    --text: #1b1730;
+    --text-soft: #3a3456;
+    --muted: #686283;
+    --meet: #0f9e8e;
+    --me: #d4850c;
+    --rec: #ee4a3d;
+    --ok: #0f8f80;
+    --warn: #b0700a;
+    --danger: #d33a2f;
+    --dial-track: rgba(27, 23, 48, 0.12);
+    --dial-tick: rgba(27, 23, 48, 0.45);
+    --focus: #6c5ce7;
+    --sheet: #ffffff;
+    --topbar-bg: rgba(243, 241, 248, 0.78);
+    --glow: rgba(120, 92, 255, 0.12);
+    --hover-line: rgba(27, 23, 48, 0.3);
+    --lift: 0 1px 2px rgba(27, 23, 48, 0.06), 0 24px 50px -28px rgba(27, 23, 48, 0.35);
+    --stop-ring: rgba(27, 23, 48, 0.1);
+    --shadow: 0 1px 2px rgba(27, 23, 48, 0.05), 0 20px 50px -30px rgba(27, 23, 48, 0.3);
+    --shadow-pop: 0 2px 8px rgba(27, 23, 48, 0.1), 0 30px 70px -20px rgba(27, 23, 48, 0.35);
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f3f1f8;
+  --bg-2: #ebe8f3;
+  --surface: #ffffff;
+  --surface-2: #f4f2f9;
+  --surface-3: #e7e3f0;
+  --line: rgba(27, 23, 48, 0.1);
+  --line-strong: rgba(27, 23, 48, 0.2);
+  --text: #1b1730;
+  --text-soft: #3a3456;
+  --muted: #686283;
+  --meet: #0f9e8e;
+  --me: #d4850c;
+  --rec: #ee4a3d;
+  --ok: #0f8f80;
+  --warn: #b0700a;
+  --danger: #d33a2f;
+  --dial-track: rgba(27, 23, 48, 0.12);
+  --dial-tick: rgba(27, 23, 48, 0.45);
+  --focus: #6c5ce7;
+  --sheet: #ffffff;
+  --topbar-bg: rgba(243, 241, 248, 0.78);
+  --glow: rgba(120, 92, 255, 0.12);
+  --hover-line: rgba(27, 23, 48, 0.3);
+  --lift: 0 1px 2px rgba(27, 23, 48, 0.06), 0 24px 50px -28px rgba(27, 23, 48, 0.35);
+  --stop-ring: rgba(27, 23, 48, 0.1);
+  --shadow: 0 1px 2px rgba(27, 23, 48, 0.05), 0 20px 50px -30px rgba(27, 23, 48, 0.3);
+  --shadow-pop: 0 2px 8px rgba(27, 23, 48, 0.1), 0 30px 70px -20px rgba(27, 23, 48, 0.35);
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -49,7 +120,7 @@ body {
   margin: 0;
   min-height: 100vh;
   background:
-    radial-gradient(900px 600px at 78% -10%, rgba(120, 92, 255, 0.16), transparent 60%),
+    radial-gradient(900px 600px at 78% -10%, var(--glow), transparent 60%),
     var(--bg);
   color: var(--text);
   font: 400 16px/1.55 var(--ui);
@@ -70,7 +141,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .topbar {
   position: sticky; top: 0; z-index: 20;
-  background: rgba(18, 15, 34, 0.72);
+  background: var(--topbar-bg);
   backdrop-filter: saturate(1.3) blur(16px);
   -webkit-backdrop-filter: saturate(1.3) blur(16px);
   border-bottom: 1px solid var(--line);
@@ -107,7 +178,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   font-weight: 600; text-decoration: none; cursor: pointer; white-space: nowrap;
   transition: background-color 0.15s, border-color 0.15s, transform 0.08s;
 }
-.btn:hover { background: var(--surface-3); border-color: rgba(236, 230, 255, 0.28); }
+.btn:hover { background: var(--surface-3); border-color: var(--hover-line); }
 .btn:active { transform: translateY(1px); }
 .btn:disabled, .btn[aria-disabled] { opacity: 0.4; cursor: not-allowed; transform: none; }
 .btn.ghost { background: transparent; border-color: var(--line); }
@@ -118,7 +189,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .btn.icon-left { padding-left: 12px; }
 .btn .chev { width: 14px; height: 14px; margin-left: -2px; opacity: 0.7; }
 .btn.primary { background: var(--text); border-color: var(--text); color: var(--bg); }
-.btn.primary:hover { background: #fff; }
+.btn.primary:hover { background: var(--text-soft); border-color: var(--text-soft); }
 .btn.danger { color: var(--danger); background: transparent; border-color: transparent; }
 .btn.danger:hover { background: rgba(255, 107, 97, 0.1); }
 
@@ -157,7 +228,7 @@ h1 {
   border: 1px solid var(--line); background: var(--bg); color: var(--text);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
-.field input::placeholder { color: rgba(163, 157, 189, 0.6); }
+.field input::placeholder { color: var(--muted); opacity: 0.75; }
 .field input:hover, .field select:hover { border-color: var(--line-strong); }
 .field input:focus, .field select:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 4px rgba(157, 140, 255, 0.18); }
 .field select option { background: var(--surface); }
@@ -219,7 +290,7 @@ h1 {
   background: var(--surface-2); font-size: 0.76rem; font-weight: 600; color: var(--muted); margin-bottom: 8px;
 }
 .rec-state .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.rec-state.live { color: #fff; background: rgba(255, 90, 78, 0.22); }
+.rec-state.live { color: var(--text); background: rgba(255, 90, 78, 0.22); }
 .rec-state.live .dot { background: var(--rec); box-shadow: 0 0 10px var(--rec); animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.25; } }
 
@@ -230,7 +301,7 @@ h1 {
 .dial-btn:hover { transform: scale(1.05); }
 .dial-btn:active { transform: scale(0.97); }
 .dial-btn.record { background: var(--rec); box-shadow: 0 0 0 8px rgba(255, 90, 78, 0.16), 0 14px 30px -10px rgba(255, 90, 78, 0.8); }
-.dial-btn.stop { background: var(--text); box-shadow: 0 0 0 8px rgba(243, 239, 250, 0.1); }
+.dial-btn.stop { background: var(--text); box-shadow: 0 0 0 8px var(--stop-ring); }
 .rec-icon { width: 24px; height: 24px; border-radius: 50%; background: #fff; }
 .stop-icon { width: 22px; height: 22px; border-radius: 5px; background: var(--rec); }
 .dial-label { margin-top: 10px; font-size: 0.8rem; font-weight: 600; color: var(--text-soft); }
@@ -360,7 +431,7 @@ h1 {
 /* the report is handed out on paper */
 .paper {
   background: var(--sheet); color: var(--sheet-ink); border-radius: var(--r-lg);
-  padding: clamp(22px, 4.5vw, 56px); box-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.9);
+  padding: clamp(22px, 4.5vw, 56px); box-shadow: var(--lift); border: 1px solid var(--line);
 }
 .report { font-family: var(--read); font-size: 1.05rem; line-height: 1.72; max-width: 68ch; overflow-wrap: break-word; }
 .report > :first-child { margin-top: 0; }
@@ -406,7 +477,7 @@ h1 {
 .deck { margin-top: 18px; border-radius: var(--r-lg); outline-offset: 4px; }
 .stage {
   container-type: inline-size; aspect-ratio: 16 / 9; width: 100%; overflow: hidden; cursor: pointer; user-select: none;
-  border-radius: var(--r-lg); box-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.9);
+  border-radius: var(--r-lg); box-shadow: var(--lift);
 }
 .deck-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
 .deck-count { min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 0.88rem; }
@@ -452,6 +523,9 @@ h1 {
 .deck:fullscreen .deck-bar { margin-top: 16px; }
 .slides-print { display: none; }
 
+.theme-btn { width: 42px; padding: 0; }
+.theme-btn .ic { width: 19px; height: 19px; }
+
 /* ---------------------------------------------------------------- dialog */
 
 dialog {
@@ -471,7 +545,7 @@ dialog::backdrop { background: rgba(7, 6, 13, 0.6); backdrop-filter: blur(4px); 
   width: 100%; resize: vertical; padding: 13px 15px; border-radius: var(--r);
   border: 1px solid var(--line); background: var(--bg); color: var(--text); line-height: 1.5;
 }
-.stab textarea::placeholder { color: rgba(163, 157, 189, 0.55); }
+.stab textarea::placeholder { color: var(--muted); opacity: 0.7; }
 .stab textarea:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 4px rgba(157, 140, 255, 0.18); }
 .stab textarea.short { min-height: 210px; }
 .stab textarea.tiny { min-height: 90px; }

@@ -1078,6 +1078,41 @@ $$("[data-stab]").forEach((t) => t.addEventListener("click", () => switchSetting
 $("#saveTemplate").addEventListener("click", saveTemplate);
 $("#resetTemplate").addEventListener("click", resetTemplate);
 
+// ---------------------------------------------------------------- theme
+
+const THEMES = ["system", "light", "dark"];
+const THEME_INFO = {
+  system: { icon: "i-auto", label: "Theme: follow system" },
+  light: { icon: "i-sun", label: "Theme: light" },
+  dark: { icon: "i-moon", label: "Theme: dark" },
+};
+
+function currentTheme() {
+  try { return localStorage.getItem("kikao.theme") || "system"; } catch (_) { return "system"; }
+}
+
+function applyTheme(name) {
+  if (name === "system") delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = name;
+  try { localStorage.setItem("kikao.theme", name); } catch (_) { /* storage blocked */ }
+  const info = THEME_INFO[name];
+  const btn = $("#themeBtn");
+  btn.innerHTML = `<svg class="ic"><use href="#${info.icon}"/></svg>`;
+  btn.setAttribute("aria-label", info.label);
+  btn.title = info.label;
+  const dark = name === "dark" || (name === "system" && !matchMedia("(prefers-color-scheme: light)").matches);
+  document.querySelector('meta[name="theme-color"]').content = dark ? "#120f22" : "#f3f1f8";
+  tape.draw();
+}
+
+$("#themeBtn").addEventListener("click", () => {
+  const next = THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length];
+  applyTheme(next);
+  toast(THEME_INFO[next].label.replace("Theme: ", "Theme set to "));
+});
+matchMedia("(prefers-color-scheme: light)").addEventListener?.("change", () => applyTheme(currentTheme()));
+applyTheme(currentTheme());
+
 (async function init() {
   await loadConfig();
   tape.draw();
