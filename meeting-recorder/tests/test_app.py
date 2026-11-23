@@ -289,7 +289,7 @@ def test_groq_request_shape_and_no_retry_when_out_of_credit(tmp_path, monkeypatc
     url, auth, data = sent[0]
     assert url == "https://api.groq.com/openai/v1/audio/transcriptions" and auth == "Bearer gsk-test"
     assert data["language"] == "sw" and data["response_format"] == "verbose_json"
-    with pytest.raises(RuntimeError, match="no credits"):
+    with pytest.raises(RuntimeError, match="no transcription credit left"):
         t.transcribe(piece, "sw")
     assert len(sent) == 2  # out-of-credit 429 fails at once instead of retrying
 

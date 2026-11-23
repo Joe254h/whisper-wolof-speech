@@ -358,7 +358,14 @@ class OpenAITranscriber:
                 time.sleep(min(60, float(wait)) if wait and wait.replace(".", "").isdigit() else 2 ** attempt * 3)
                 continue
             if not resp.ok:
-                raise RuntimeError(f"{self.label} transcription failed ({resp.status_code}): {_error_text(resp)}")
+                detail = _error_text(resp)
+                if resp.status_code in (401, 402, 403, 429) and any(
+                        w in detail.lower() for w in ("credit", "quota", "billing", "balance")):
+                    hint = (" Switch to Groq's free tier: add GROQ_API_KEY to meeting-recorder/.env, set "
+                            "TRANSCRIBER=groq, restart the app and press Retry." if self.name != "groq" else
+                            " Wait for the free-tier limit to reset, or add credit in the Groq console.")
+                    raise RuntimeError(f"{self.label} has no transcription credit left.{hint}")
+                raise RuntimeError(f"{self.label} transcription failed ({resp.status_code}): {detail}")
             body = resp.json()
             if verbose and body.get("segments"):
                 return [Segment(s["start"], s["end"], s["text"].strip()) for s in body["segments"]]
