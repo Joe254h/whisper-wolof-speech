@@ -98,8 +98,9 @@ async function loadConfig() {
   }
   const c = state.config;
   const pills = [
-    { ok: c.transcriber.ready, on: `Whisper · ${c.transcriber.backend === "local" ? "on this server" : "OpenAI"}`,
-      off: c.transcriber.backend === "local" ? "Whisper: install faster-whisper" : "Whisper: add OPENAI_API_KEY" },
+    { ok: c.transcriber.ready,
+      on: `Whisper · ${c.transcriber.backend === "local" ? "on this computer" : c.transcriber.label || "OpenAI"}`,
+      off: c.transcriber.backend === "local" ? "Whisper: install faster-whisper" : `Whisper: add ${c.transcriber.key_name || "an API key"}` },
     { ok: c.writer.ready, on: "Reports · OpenRouter", off: "Reports: add OPENROUTER_API_KEY" },
   ];
   $("#services").innerHTML = "";

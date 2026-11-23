@@ -257,12 +257,25 @@ class Segment:
 
 
 class OpenAITranscriber:
-    name = "openai"
-    parallel = True
+    """Any OpenAI-compatible /audio/transcriptions API: OpenAI itself, or Groq (open-source Whisper large-v3)."""
 
-    def __init__(self):
-        self.api_key = os.environ.get("OPENAI_API_KEY", "")
-        self.model = os.environ.get("OPENAI_TRANSCRIBE_MODEL", "whisper-1")
+    parallel = True
+    PROVIDERS = {
+        "openai": {"label": "OpenAI", "key": "OPENAI_API_KEY", "model_env": "OPENAI_TRANSCRIBE_MODEL",
+                   "model": "whisper-1", "url": lambda: OPENAI_BASE_URL},
+        "groq": {"label": "Groq", "key": "GROQ_API_KEY", "model_env": "GROQ_TRANSCRIBE_MODEL",
+                 "model": "whisper-large-v3",
+                 "url": lambda: os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/")},
+    }
+
+    def __init__(self, provider: str = "openai"):
+        cfg = self.PROVIDERS[provider]
+        self.name = provider
+        self.label = cfg["label"]
+        self.key_name = cfg["key"]
+        self.api_key = os.environ.get(cfg["key"], "")
+        self.model = os.environ.get(cfg["model_env"], cfg["model"])
+        self.base_url = cfg["url"]()
 
     @property
     def ready(self) -> bool:
@@ -270,33 +283,38 @@ class OpenAITranscriber:
 
     def transcribe(self, path: Path, language: str) -> list[Segment]:
         if not self.api_key:
-            raise RuntimeError("OPENAI_API_KEY is not set. Add it to meeting-recorder/.env.")
-        verbose = self.model == "whisper-1"
-        data = {"model": self.model, "language": language,
+            raise RuntimeError(f"{self.key_name} is not set. Add it to meeting-recorder/.env.")
+        verbose = "whisper" in self.model  # Whisper models return timestamped segments
+        data = {"model": self.model, "language": language, "temperature": "0",
                 "response_format": "verbose_json" if verbose else "json"}
-        for attempt in range(4):
+        for attempt in range(6):
             with open(path, "rb") as fh:
                 resp = requests.post(
-                    f"{OPENAI_BASE_URL}/audio/transcriptions",
+                    f"{self.base_url}/audio/transcriptions",
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     data=data, files={"file": (path.name, fh, "audio/mpeg")}, timeout=600,
                 )
-            if resp.status_code in (429, 500, 502, 503, 504) and attempt < 3:
-                time.sleep(2 ** attempt * 3)
+            retryable = resp.status_code in (500, 502, 503, 504) or (
+                resp.status_code == 429 and "credit" not in resp.text.lower() and "quota" not in resp.text.lower())
+            if retryable and attempt < 5:
+                wait = resp.headers.get("retry-after")
+                time.sleep(min(60, float(wait)) if wait and wait.replace(".", "").isdigit() else 2 ** attempt * 3)
                 continue
             if not resp.ok:
-                raise RuntimeError(f"OpenAI transcription failed ({resp.status_code}): {_error_text(resp)}")
+                raise RuntimeError(f"{self.label} transcription failed ({resp.status_code}): {_error_text(resp)}")
             body = resp.json()
             if verbose and body.get("segments"):
                 return [Segment(s["start"], s["end"], s["text"].strip()) for s in body["segments"]]
             return [Segment(0.0, 0.0, (body.get("text") or "").strip())]
-        raise RuntimeError("OpenAI transcription kept failing. Try again later.")
+        raise RuntimeError(f"{self.label} transcription kept failing. Try again later.")
 
 
 class LocalTranscriber:
     """faster-whisper on this machine. Slow on CPU: budget roughly real time with 'small'."""
 
     name = "local"
+    label = "this computer"
+    key_name = None
     parallel = False  # one model in memory; pieces run one after another
 
     def __init__(self):
@@ -323,7 +341,13 @@ class LocalTranscriber:
 
 
 def make_transcriber():
-    return LocalTranscriber() if os.environ.get("TRANSCRIBER", "openai").lower() == "local" else OpenAITranscriber()
+    """TRANSCRIBER=groq|openai|local. Unset: Groq when GROQ_API_KEY is present, else OpenAI."""
+    choice = os.environ.get("TRANSCRIBER", "").strip().lower()
+    if not choice:
+        choice = "groq" if os.environ.get("GROQ_API_KEY") else "openai"
+    if choice == "local":
+        return LocalTranscriber()
+    return OpenAITranscriber(choice if choice in OpenAITranscriber.PROVIDERS else "openai")
 
 
 # --------------------------------------------------------------------------- report

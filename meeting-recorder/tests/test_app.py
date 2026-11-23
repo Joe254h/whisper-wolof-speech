@@ -249,3 +249,39 @@ def test_pieces_are_transcribed_in_parallel_and_kept_in_order(tmp_path, monkeypa
     assert t.peak == 5
     assert [seg["text"] for seg in s["transcript"]] == [f"piece {i}" for i in range(5)]
     assert [seg["start"] for seg in s["transcript"]] == [1, 61, 121, 181, 241]
+
+
+def test_groq_request_shape_and_no_retry_when_out_of_credit(tmp_path, monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.delenv("TRANSCRIBER", raising=False)
+    t = services.make_transcriber()
+    assert (t.name, t.model) == ("groq", "whisper-large-v3")
+
+    sent = []
+
+    class Resp:
+        def __init__(self, code, body):
+            self.status_code, self._body, self.headers = code, body, {}
+            self.ok = code < 400
+            self.text = str(body)
+
+        def json(self):
+            return self._body
+
+    replies = [Resp(200, {"segments": [{"start": 0.0, "end": 3.0, "text": " Habari"}]}),
+               Resp(429, {"error": {"message": "You have no credits remaining."}})]
+
+    def fake_post(url, headers, data, files, timeout):
+        sent.append((url, headers["Authorization"], dict(data)))
+        return replies.pop(0)
+
+    monkeypatch.setattr(services.requests, "post", fake_post)
+    piece = tmp_path / "p.mp3"
+    piece.write_bytes(b"x")
+    assert t.transcribe(piece, "sw")[0].text == "Habari"
+    url, auth, data = sent[0]
+    assert url == "https://api.groq.com/openai/v1/audio/transcriptions" and auth == "Bearer gsk-test"
+    assert data["language"] == "sw" and data["response_format"] == "verbose_json"
+    with pytest.raises(RuntimeError, match="no credits"):
+        t.transcribe(piece, "sw")
+    assert len(sent) == 2  # out-of-credit 429 fails at once instead of retrying

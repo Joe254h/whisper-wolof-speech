@@ -65,6 +65,7 @@ def create_app(data_dir: Path | None = None, transcriber=None, writer=None) -> F
             "report_languages": REPORT_LANGUAGES,
             "max_minutes": MAX_MINUTES,
             "transcriber": {"backend": t.name, "ready": t.ready,
+                            "label": getattr(t, "label", t.name), "key_name": getattr(t, "key_name", None),
                             "model": getattr(t, "model", None) or getattr(t, "model_name", None)},
             "writer": {"ready": w.ready, "model": w.model},
         })

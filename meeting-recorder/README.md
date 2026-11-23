@@ -26,12 +26,17 @@ Your microphone  ──┘                                                   │
 
 ## Keys you need
 
-| Service | Used for | Variable |
-|---|---|---|
-| OpenAI | Whisper transcription (`whisper-1`) | `OPENAI_API_KEY` |
-| OpenRouter | Writing the report | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` |
+Transcription needs **one** of these:
 
-OpenRouter only provides chat models, not the Whisper speech-to-text endpoint, so transcription needs its own OpenAI key. To skip OpenAI, set `TRANSCRIBER=local` and `pip install faster-whisper`. Whisper then runs on your own machine. That is free but slow on CPU: expect roughly the length of the meeting with the `small` model. For good Kiswahili accuracy, use `LOCAL_WHISPER_MODEL=large-v3`, which needs a GPU.
+| Provider | Model | Cost per hour of audio | Variable |
+|---|---|---|---|
+| Groq (recommended) | open-source Whisper large-v3 | free tier, then about $0.11 | `GROQ_API_KEY` |
+| OpenAI | whisper-1 | about $0.36 | `OPENAI_API_KEY` |
+| This computer | faster-whisper | free, slow without a GPU | `TRANSCRIBER=local` |
+
+Reports are written through OpenRouter (`OPENROUTER_API_KEY`, `OPENROUTER_MODEL`). An hour-long report with a Flash-class model costs a cent or two.
+
+When `GROQ_API_KEY` is set and `TRANSCRIBER` is empty, Kikao uses Groq. To run Whisper on your own machine instead, set `TRANSCRIBER=local` and `pip install faster-whisper`. That is free but slow on CPU: expect roughly the length of the meeting with the `small` model. For good Kiswahili accuracy use `LOCAL_WHISPER_MODEL=large-v3`, which needs a GPU.
 
 ## Run locally
 
