@@ -1,4 +1,4 @@
-"""Kikao: record a Teams / Google Meet meeting in the browser, transcribe it with
+"""ICPAC Minutes: record a Teams / Google Meet meeting in the browser, transcribe it with
 Whisper (English or Kiswahili) and turn it into a formatted report via OpenRouter."""
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ def create_app(data_dir: Path | None = None, transcriber=None, writer=None) -> F
             duration = services.probe_duration(path)
         except RuntimeError:
             store.delete(meta["id"])
-            return jsonify({"error": "That file has no audio Kikao can read. Try MP3, M4A or WAV."}), 400
+            return jsonify({"error": "That file has no audio the app can read. Try MP3, M4A or WAV."}), 400
         if duration > services.MAX_MINUTES * 60 + 30:
             store.delete(meta["id"])
             return jsonify({"error": f"That recording is {round(duration / 60)} minutes long. "

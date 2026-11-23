@@ -1,6 +1,6 @@
-# Kikao: meeting recorder and report writer
+# ICPAC Minutes: meeting recorder and report writer
 
-Kikao records a Microsoft Teams or Google Meet meeting from your browser for up to one hour. It transcribes the recording with OpenAI Whisper in **English or Kiswahili**, then has an LLM on OpenRouter turn the transcript into a report in your chosen format.
+ICPAC Minutes records a Microsoft Teams or Google Meet meeting from your browser for up to one hour. It transcribes the recording with OpenAI Whisper in **English or Kiswahili**, then has an LLM on OpenRouter turn the transcript into a report in your chosen format.
 
 ## How it works
 
@@ -15,7 +15,7 @@ Your microphone  ──┘                                                   │
                          OpenRouter LLM + your report template ─► report.md
 ```
 
-- **Capture.** Press *Share meeting tab and start*, pick the Meet or Teams tab, and keep *Also share tab audio* on. Your microphone is mixed in so your own voice is included. Kikao doesn't join the call as a bot, so nobody needs to admit anything.
+- **Capture.** Press *Share meeting tab and start*, pick the Meet or Teams tab, and keep *Also share tab audio* on. Your microphone is mixed in so your own voice is included. The app doesn't join the call as a bot, so nobody needs to admit anything.
 - **Safe for long meetings.** Audio goes to the server every 15 seconds. If the tab crashes, everything up to that point is kept, and the meeting shows a *Process what was recorded* button.
 - **One-hour limit.** Recording stops by itself at 60 minutes (`MAX_RECORDING_MINUTES`).
 - **Languages.** Only `en` and `sw` are accepted, and Whisper is told the language explicitly instead of guessing. The report can be written in the meeting's language, in English, or in Kiswahili.
@@ -49,7 +49,7 @@ Transcription needs **one** of these:
 
 Reports are written through OpenRouter (`OPENROUTER_API_KEY`, `OPENROUTER_MODEL`). An hour-long report with a Flash-class model costs a cent or two.
 
-When `GROQ_API_KEY` is set and `TRANSCRIBER` is empty, Kikao uses Groq.
+When `GROQ_API_KEY` is set and `TRANSCRIBER` is empty, the app uses Groq.
 
 To run Whisper on your own machine instead, set `TRANSCRIBER=local` and `pip install faster-whisper`. The model is downloaded from Hugging Face on first use.
 
@@ -81,8 +81,8 @@ The browser can capture audio only from one of its own tabs, or from the whole s
 ## Deploy
 
 ```bash
-docker build -t kikao meeting-recorder
-docker run -p 8000:8000 --env-file meeting-recorder/.env -v kikao-data:/home/user/app/data kikao
+docker build -t icpac-minutes meeting-recorder
+docker run -p 8000:8000 --env-file meeting-recorder/.env -v icpac-minutes-data:/home/user/app/data icpac-minutes
 ```
 
 Put it behind HTTPS, which screen capture requires. Keep a single gunicorn worker, because jobs run in a background thread inside it. There is no login, so don't expose it publicly without adding authentication in front of it.

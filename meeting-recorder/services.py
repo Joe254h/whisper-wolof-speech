@@ -1,4 +1,4 @@
-"""Storage, transcription and report generation for Kikao."""
+"""Storage, transcription and report generation for ICPAC Minutes."""
 
 from __future__ import annotations
 
@@ -568,7 +568,7 @@ class OpenRouterWriter:
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
-                    "X-Title": "Kikao meeting reports",
+                    "X-Title": "ICPAC Minutes",
                 },
                 json={"model": model, "messages": messages, "temperature": 0.2, "max_tokens": self.max_tokens},
                 timeout=300,

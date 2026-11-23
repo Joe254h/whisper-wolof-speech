@@ -1,4 +1,4 @@
-"""File exports for Kikao: Word, PowerPoint, HTML, plain text, subtitles and JSON."""
+"""File exports for ICPAC Minutes: Word, PowerPoint, HTML, plain text, subtitles and JSON."""
 
 from __future__ import annotations
 
