@@ -572,6 +572,7 @@ function schedulePoll() {
 
 async function selectSession(id) {
   if (!id) return;
+  if (state.selectedId !== id) deckState.index = 0;
   state.selectedId = id;
   state.editing = false;
   renderList();
@@ -639,13 +640,8 @@ function renderDetail(s, full) {
   $("#finishOrphanBtn").hidden = !orphan;
 
   // report
-  $("#downloadReport").href = `/api/sessions/${s.id}/report.md`;
-  for (const id of ["copyReport", "downloadReport", "printReport", "editReport"]) {
-    $("#" + id).toggleAttribute("disabled", !s.report);
-    $("#" + id).classList.toggle("is-disabled", !s.report);
-  }
-  $("#downloadReport").style.pointerEvents = s.report ? "" : "none";
-  $("#downloadReport").style.opacity = s.report ? "" : "0.45";
+  for (const id of ["copyReport", "printReport", "editReport"]) $("#" + id).disabled = !s.report;
+  updateDownloads(s);
   $("#regenReport").disabled = !s.has_transcript || busy;
   $("#deleteBtn").disabled = busy || live;
 
@@ -655,8 +651,9 @@ function renderDetail(s, full) {
       : `<p class="placeholder">${busy ? "The report will appear here when processing finishes." : live ? "The report will be written after you stop recording." : "No report yet."}</p>`;
     $("#reportEditor").hidden = true;
     $("#report").hidden = false;
-    $("#editReport").textContent = "Edit";
+    setBtn($("#editReport"), "i-edit", "Edit");
     renderTranscript(s);
+    renderSlides(s);
   }
 }
 
@@ -669,10 +666,6 @@ function renderTranscript(s) {
     player.dataset.src = src;
     if (src) player.src = src; else player.removeAttribute("src");
   }
-  $("#downloadAudio").href = `/api/sessions/${s.id}/audio?download=1`;
-  $("#downloadTranscript").href = `/api/sessions/${s.id}/transcript.txt`;
-  $("#downloadTranscript").style.display = s.transcript ? "" : "none";
-  $("#downloadAudio").style.display = s.has_audio ? "" : "none";
   if (!s.transcript) {
     const li = document.createElement("li");
     li.innerHTML = '<span></span><span class="tx placeholder"></span>';
@@ -720,7 +713,7 @@ async function toggleEdit() {
     $("#reportEditor").value = s.report;
     $("#reportEditor").hidden = false;
     $("#report").hidden = true;
-    $("#editReport").textContent = "Save edits";
+    setBtn($("#editReport"), "i-check", "Save edits");
     $("#reportEditor").focus();
     return;
   }
@@ -783,27 +776,167 @@ async function deleteSelected() {
 // ---------------------------------------------------------------- template dialog
 
 async function openTemplate() {
-  const { template } = await api("/api/template");
+  const [{ template }, settings] = await Promise.all([api("/api/template"), api("/api/settings")]);
   $("#templateText").value = template;
+  $("#vocabText").value = settings.vocabulary;
+  $("#instructionsText").value = settings.instructions;
+  $("#headerText").value = settings.header;
+  $("#footerText").value = settings.footer;
   $("#modelInput").value = state.model;
+  switchSettingsTab("vocab");
   $("#templateDialog").showModal();
 }
 
+function switchSettingsTab(name) {
+  for (const t of $$("[data-stab]")) {
+    const on = t.dataset.stab === name;
+    t.classList.toggle("active", on);
+    t.setAttribute("aria-selected", on);
+  }
+  for (const panel of $$("[data-stab-panel]")) panel.hidden = panel.dataset.stabPanel !== name;
+}
+
 async function saveTemplate() {
-  await api("/api/template", {
-    method: "PUT", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ template: $("#templateText").value }),
-  });
+  const json = (body) => ({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  try {
+    await Promise.all([
+      api("/api/template", json({ template: $("#templateText").value })),
+      api("/api/settings", json({
+        vocabulary: $("#vocabText").value, instructions: $("#instructionsText").value,
+        header: $("#headerText").value, footer: $("#footerText").value,
+      })),
+    ]);
+  } catch (e) {
+    toast(e.message);
+    return;
+  }
   state.model = $("#modelInput").value.trim();
   try { localStorage.setItem("kikao.model", state.model); } catch (_) { /* storage blocked */ }
   $("#templateDialog").close();
-  toast("Template saved");
+  toast("Settings saved. They apply to the next report you write.");
 }
 
 async function resetTemplate() {
   const { default: def } = await api("/api/template");
   $("#templateText").value = def;
 }
+
+// ---------------------------------------------------------------- downloads
+
+function setBtn(el, icon, label) {
+  el.innerHTML = `<svg class="ic"><use href="#${icon}"/></svg>`;
+  el.append(document.createTextNode(label));
+}
+
+function updateDownloads(s) {
+  const has = { report: !!s.report, slides: !!s.report, transcript: !!s.transcript, audio: !!s.has_audio };
+  for (const a of $$("[data-dl]")) {
+    const key = a.dataset.dl;
+    const what = key.split(".")[0];
+    a.href = key === "audio" ? `/api/sessions/${s.id}/audio?download=1` : `/api/sessions/${s.id}/download/${key}`;
+    a.toggleAttribute("aria-disabled", !has[what]);
+    a.tabIndex = has[what] ? 0 : -1;
+  }
+  for (const b of $$("[data-action]")) b.disabled = !s.report;
+  $("#audioExt").textContent = s.audio_ext || ".webm";
+  $("#downloadToggle").disabled = !(has.report || has.transcript || has.audio);
+  $("#pptxLink").href = `/api/sessions/${s.id}/download/slides.pptx`;
+}
+
+function toggleMenu(open) {
+  const panel = $("#downloadPanel");
+  open = open === undefined ? panel.hidden : open;
+  panel.hidden = !open;
+  $("#downloadToggle").setAttribute("aria-expanded", open);
+  if (open) (panel.querySelector('[role="menuitem"]:not([aria-disabled]):not(:disabled)') || panel).focus();
+}
+
+// ---------------------------------------------------------------- slides
+
+const deckState = { index: 0, deck: null };
+
+function slideHTML(sl, i, total, deck) {
+  const esc = (t) => { const d = document.createElement("div"); d.textContent = t; return d.innerHTML; };
+  if (i === -1) {
+    return `<div class="slide title-slide"><div class="ts-brand"><span class="dot"></span>Meeting brief</div>
+      <h3>${esc(deck.title)}</h3><span class="ts-rule"></span><p>${esc(deck.subtitle || "")}</p>
+      <small>About two minutes to read</small></div>`;
+  }
+  let body = "";
+  if (sl.lead) body += `<p class="lead">${esc(sl.lead)}</p>`;
+  if (sl.table) {
+    body += `<table><thead><tr>${sl.table.columns.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${
+      sl.table.rows.map((r) => `<tr>${sl.table.columns.map((_, ci) => `<td>${esc(r[ci] || "")}</td>`).join("")}</tr>`).join("")
+    }</tbody></table>`;
+  }
+  if (sl.bullets && sl.bullets.length) body += `<ul>${sl.bullets.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>`;
+  return `<div class="slide"><h3>${esc(sl.title)}</h3><div class="slide-body">${body}</div>
+    <footer><span>${esc(deck.title)}</span><span>${i + 2} / ${total + 1}</span></footer></div>`;
+}
+
+function renderSlides(s) {
+  const deck = s.slides;
+  deckState.deck = deck;
+  const stage = $("#stage");
+  const has = deck && deck.slides && deck.slides.length;
+  $("#prevSlide").disabled = $("#nextSlide").disabled = $("#fullscreenSlides").disabled = !has;
+  $("#rebuildSlides").disabled = !s.report || BUSY.has(s.status);
+  $("#pptxLink").toggleAttribute("aria-disabled", !has);
+  if (!has) {
+    stage.innerHTML = `<div class="slide empty-slide"><p>${
+      BUSY.has(s.status) ? "Slides are made right after the report is written." :
+      s.report ? "No slides yet. Press \u201cUpdate from report\u201d to make them." : "Slides appear once the report is written."
+    }</p></div>`;
+    $("#slideCount").textContent = "0 / 0";
+    $("#slidesPrint").innerHTML = "";
+    return;
+  }
+  const total = deck.slides.length;
+  deckState.index = Math.min(deckState.index, total);
+  $("#slidesPrint").innerHTML = [-1, ...deck.slides.map((_, i) => i)]
+    .map((i) => `<div class="slide-page">${slideHTML(deck.slides[i], i, total, deck)}</div>`).join("");
+  showSlide(deckState.index);
+}
+
+function showSlide(n) {
+  const deck = deckState.deck;
+  if (!deck || !deck.slides.length) return;
+  const total = deck.slides.length;
+  n = Math.max(0, Math.min(total, n));
+  deckState.index = n;
+  $("#stage").innerHTML = slideHTML(deck.slides[n - 1], n - 1, total, deck);
+  $("#slideCount").textContent = `${n + 1} / ${total + 1}`;
+  $("#prevSlide").disabled = n === 0;
+  $("#nextSlide").disabled = n === total;
+}
+
+async function rebuildSlides() {
+  const s = state.selected;
+  if (!s) return;
+  const btn = $("#rebuildSlides");
+  btn.disabled = true;
+  setBtn(btn, "i-refresh", "Updating\u2026");
+  try {
+    const { slides } = await api(`/api/sessions/${s.id}/slides`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: state.model }),
+    });
+    s.slides = slides;
+    deckState.index = 0;
+    renderSlides(s);
+    toast("Slides updated from the report");
+  } catch (e) {
+    toast(e.message);
+  }
+  setBtn(btn, "i-refresh", "Update from report");
+  btn.disabled = false;
+}
+
+function printSlides() {
+  if (!deckState.deck) return;
+  document.body.classList.add("printing-slides");
+  window.print();
+}
+window.addEventListener("afterprint", () => document.body.classList.remove("printing-slides"));
 
 // ---------------------------------------------------------------- wiring
 
@@ -818,13 +951,13 @@ function switchMode(live) {
 }
 
 function switchTab(name) {
-  for (const t of $$(".tab")) {
+  for (const t of $$(".dtab")) {
     const on = t.dataset.tab === name;
     t.classList.toggle("active", on);
     t.setAttribute("aria-selected", on);
   }
-  $("#panel-report").hidden = name !== "report";
-  $("#panel-transcript").hidden = name !== "transcript";
+  for (const n of ["report", "slides", "transcript"]) $(`#panel-${n}`).hidden = name !== n;
+  if (name === "slides") $("#deck").focus({ preventScroll: true });
 }
 
 $("#tabLive").addEventListener("click", () => switchMode(true));
@@ -842,7 +975,39 @@ dz.addEventListener("drop", (e) => {
 });
 $("#uploadBtn").addEventListener("click", uploadFile);
 
-$$(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
+$$(".dtab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
+$("#downloadToggle").addEventListener("click", (e) => { e.stopPropagation(); toggleMenu(); });
+$("#downloadPanel").addEventListener("click", (e) => {
+  const item = e.target.closest('[role="menuitem"]');
+  if (!item) return;
+  if (item.hasAttribute("aria-disabled")) { e.preventDefault(); return; }
+  if (item.dataset.action === "print-report") { switchTab("report"); window.print(); }
+  if (item.dataset.action === "print-slides") printSlides();
+  toggleMenu(false);
+});
+document.addEventListener("click", (e) => { if (!e.target.closest("#downloadMenu")) toggleMenu(false); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#downloadPanel").hidden) { toggleMenu(false); $("#downloadToggle").focus(); }
+});
+$("#prevSlide").addEventListener("click", () => showSlide(deckState.index - 1));
+$("#nextSlide").addEventListener("click", () => showSlide(deckState.index + 1));
+$("#deck").addEventListener("keydown", (e) => {
+  if (["ArrowRight", "PageDown", " "].includes(e.key)) { e.preventDefault(); showSlide(deckState.index + 1); }
+  if (["ArrowLeft", "PageUp"].includes(e.key)) { e.preventDefault(); showSlide(deckState.index - 1); }
+  if (e.key === "Home") showSlide(0);
+  if (e.key === "End") showSlide(Infinity);
+});
+$("#stage").addEventListener("click", (e) => {
+  const r = e.currentTarget.getBoundingClientRect();
+  showSlide(deckState.index + (e.clientX - r.left < r.width / 3 ? -1 : 1));
+});
+$("#fullscreenSlides").addEventListener("click", () => {
+  const d = $("#deck");
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (d.requestFullscreen) d.requestFullscreen().then(() => d.focus()).catch(() => toast("Full screen is blocked here."));
+});
+$("#rebuildSlides").addEventListener("click", rebuildSlides);
+$("#pptxLink").addEventListener("click", (e) => { if (e.currentTarget.hasAttribute("aria-disabled")) e.preventDefault(); });
 $("#detailTitle").addEventListener("change", saveTitle);
 $("#detailTitle").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
 $("#copyReport").addEventListener("click", async () => {
@@ -851,12 +1016,13 @@ $("#copyReport").addEventListener("click", async () => {
     await navigator.clipboard.writeText(state.selected.report);
     toast("Report copied as Markdown");
   } catch (_) {
-    toast("Copy is blocked here. Use Download .md instead.");
+    toast("Copy is blocked here. Use Download instead.");
   }
 });
 $("#printReport").addEventListener("click", () => {
   if (!state.selected || !state.selected.report) return;
   switchTab("report");
+  document.body.classList.remove("printing-slides");
   window.print();
 });
 $("#editReport").addEventListener("click", toggleEdit);
@@ -869,6 +1035,7 @@ $("#finishOrphanBtn").addEventListener("click", finishOrphan);
 $("#deleteBtn").addEventListener("click", deleteSelected);
 
 $("#openTemplate").addEventListener("click", openTemplate);
+$$("[data-stab]").forEach((t) => t.addEventListener("click", () => switchSettingsTab(t.dataset.stab)));
 $("#saveTemplate").addEventListener("click", saveTemplate);
 $("#resetTemplate").addEventListener("click", resetTemplate);
 

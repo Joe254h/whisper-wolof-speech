@@ -19,8 +19,20 @@ Your microphone  ──┘                                                   │
 - **Safe for long meetings.** Audio goes to the server every 15 seconds. If the tab crashes, everything up to that point is kept, and the meeting shows a *Process what was recorded* button.
 - **One-hour limit.** Recording stops by itself at 60 minutes (`MAX_RECORDING_MINUTES`).
 - **Languages.** Only `en` and `sw` are accepted, and Whisper is told the language explicitly instead of guessing. The report can be written in the meeting's language, in English, or in Kiswahili.
-- **Report format.** Open *Report template* to edit the Markdown template. The model keeps your headings, order and tables. `{{title}}`, `{{date}}` and `{{language}}` are filled in for you. You can also choose the OpenRouter model there.
-- **Outputs.** Rendered report, edit in place, copy as Markdown, download `.md`, save as PDF through the print dialog, timestamped transcript with click-to-play, `.txt` and audio downloads.
+- **Report format.** Open *Report settings* to edit the Markdown template. The model keeps your headings, order and tables. `{{title}}`, `{{date}}` and `{{language}}` are filled in for you. You can also choose the OpenRouter model there.
+- **Report.** Rendered in the app, editable in place, and rewritable from the transcript.
+- **Slides for skimming.** After the report, the AI makes a short deck: at a glance, key points, decisions, an action-items table, risks and next steps. Flip through it in the app with the arrow keys or full screen, or download it. *Update from report* rebuilds it after you edit the report.
+- **Downloads.**
+  - Report: Word (`.docx`), PDF, web page (`.html`), Markdown and plain text.
+  - Slides: PowerPoint (`.pptx`) and PDF.
+  - Transcript: Word, text, subtitles (`.srt`, `.vtt`) and JSON.
+  - The original audio.
+  - PDFs come from the browser's print dialog: choose *Save as PDF*.
+- **Report settings.**
+  - Vocabulary: names and terms passed to Whisper as a spelling hint and to the report writer.
+  - Template: your report format.
+  - Instructions: extra guidance for the AI, for example tone or length.
+  - Header and footer: fixed text added word for word to every report.
 - **Uploads.** You can also upload an existing recording up to 60 minutes long and 1 GB in size (MP3, M4A, WAV, WebM, MP4 and more). A longer file is refused before it uploads.
 - **Speed.** The audio is cut into 10-minute pieces and all of them go to Whisper at the same time, so an hour-long meeting takes about as long as one 10-minute piece. Change this with `TRANSCRIBE_PARALLEL`.
 

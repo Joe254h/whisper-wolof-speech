@@ -30,8 +30,9 @@ class FakeTranscriber:
     def __init__(self):
         self.calls = []
 
-    def transcribe(self, path, language):
+    def transcribe(self, path, language, prompt=None):
         self.calls.append((Path(path).name, language))
+        self.prompts = getattr(self, 'prompts', []) + [prompt]
         n = len(self.calls)
         return [services.Segment(0.0, 5.0, f"Part {n} opening ({language})."),
                 services.Segment(60.0, 65.0, f"Part {n} decision: ship on Friday.")]
@@ -40,6 +41,7 @@ class FakeTranscriber:
 class FakeWriter:
     ready = True
     model = "fake/llm"
+    slides_reply = "not json"  # falls back to slides built from the report
 
     def __init__(self, fail=False):
         self.messages = None
@@ -48,6 +50,9 @@ class FakeWriter:
     def write(self, messages, model=None):
         if self.fail:
             raise RuntimeError("OpenRouter request failed (401): bad key")
+        if "slide deck" in messages[0]["content"]:
+            self.slide_messages = messages
+            return self.slides_reply, model or self.model
         self.messages = messages
         return "# Report\n\n## Decisions\n- Ship on Friday", model or self.model
 
@@ -227,7 +232,7 @@ def test_pieces_are_transcribed_in_parallel_and_kept_in_order(tmp_path, monkeypa
             self.peak = 0
             self.lock = threading.Lock()
 
-        def transcribe(self, path, language):
+        def transcribe(self, path, language, prompt=None):
             idx = int(Path(path).stem.split("_")[1])
             with self.lock:
                 self.active += 1
@@ -333,3 +338,131 @@ def test_concurrent_polling_and_updates(tmp_path):
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert errors == []
+
+
+def test_vocabulary_instructions_header_and_footer(env):
+    client, transcriber, writer, tmp = env
+    r = client.put("/api/settings", json={
+        "vocabulary": "AIMS Senegal\nWanjiru, M-Pesa\naims senegal",
+        "instructions": "Use a formal tone.",
+        "header": "**ACME Ltd. Minutes of {{title}}**",
+        "footer": "Confidential. Prepared {{date}}.",
+    })
+    assert r.status_code == 200
+    assert client.get("/api/settings").get_json()["instructions"] == "Use a formal tone."
+
+    wav = tmp / "v.wav"
+    make_audio(wav, 10, ("-c:a", "pcm_s16le"))
+    with open(wav, "rb") as fh:
+        sid = client.post("/api/sessions/upload", data={"audio": (fh, "Board.wav"), "language": "en"},
+                          content_type="multipart/form-data").get_json()["id"]
+    s = wait_done(client, sid)
+    assert s["status"] == "done", s["error"]
+    assert transcriber.prompts == ["AIMS Senegal, Wanjiru, M-Pesa."]  # duplicate removed
+    system, user = writer.messages[0]["content"], writer.messages[1]["content"]
+    assert "Use a formal tone." in system
+    assert "VOCABULARY (correct spellings)\nAIMS Senegal, Wanjiru, M-Pesa" in user
+    assert s["report"].startswith("**ACME Ltd. Minutes of Board**\n\n# Report")
+    assert s["report"].rstrip().endswith(".") and "Confidential. Prepared" in s["report"]
+    assert "{{date}}" not in s["report"]
+
+
+RICH_REPORT = """# Weekly sync
+
+**Date:** 22 November 2026
+
+## Summary
+The team agreed to launch the pilot on the 10th. Budget review moves to Friday.
+
+## Decisions
+- Launch the **pilot** on the 10th
+- Move budget review to Friday
+
+## Action items
+| Action | Owner | Due date |
+|---|---|---|
+| Prepare budget | Amina | Friday |
+| Book venue | Unassigned | Not set |
+
+## Next steps
+Meet again next Tuesday.
+"""
+
+
+def _done_session(client, tmp, writer):
+    writer_write = writer.write
+
+    def write(messages, model=None):
+        text, used = writer_write(messages, model)
+        return (RICH_REPORT if text.startswith("# Report") else text), used
+
+    writer.write = write
+    wav = tmp / "d.wav"
+    make_audio(wav, 10, ("-c:a", "pcm_s16le"))
+    with open(wav, "rb") as fh:
+        sid = client.post("/api/sessions/upload", data={"audio": (fh, "Weekly sync.wav"), "language": "sw"},
+                          content_type="multipart/form-data").get_json()["id"]
+    s = wait_done(client, sid)
+    assert s["status"] == "done", s["error"]
+    return sid, s
+
+
+def test_slides_fall_back_to_report_sections(env):
+    client, transcriber, writer, tmp = env
+    sid, s = _done_session(client, tmp, writer)
+    deck = s["slides"]
+    titles = [sl["title"] for sl in deck["slides"]]
+    assert titles == ["Summary", "Decisions", "Action items", "Next steps"]
+    actions = deck["slides"][2]["table"]
+    assert actions["columns"] == ["Action", "Owner", "Due date"] and actions["rows"][0] == ["Prepare budget", "Amina", "Friday"]
+    assert deck["slides"][1]["bullets"][0] == "Launch the pilot on the 10th"
+    assert "Kiswahili" in deck["subtitle"]
+
+
+def test_slides_from_model_json(env):
+    client, transcriber, writer, tmp = env
+    writer.slides_reply = '```json\n{"title":"Weekly sync","subtitle":"x","slides":[' \
+        '{"title":"At a glance","lead":"Pilot launches on the 10th.","bullets":[]},' \
+        '{"title":"Action items","table":{"columns":["Action","Owner","Due"],"rows":[["Budget","Amina","Fri"]]}},' \
+        '{"title":"","bullets":["dropped: no title"]}]}\n```'
+    sid, s = _done_session(client, tmp, writer)
+    assert [sl["title"] for sl in s["slides"]["slides"]] == ["At a glance", "Action items"]
+    assert "Kiswahili" in writer.slide_messages[0]["content"]
+    # rebuilding after an edit uses the edited report
+    client.patch(f"/api/sessions/{sid}", json={"report": "## Only section\n- One point"})
+    writer.slides_reply = "garbage"
+    deck = client.post(f"/api/sessions/{sid}/slides", json={}).get_json()["slides"]
+    assert [sl["title"] for sl in deck["slides"]] == ["Only section"]
+
+
+def test_every_download_format(env):
+    import io
+    from docx import Document
+    from pptx import Presentation
+
+    client, transcriber, writer, tmp = env
+    sid, _ = _done_session(client, tmp, writer)
+
+    def get(what, fmt):
+        r = client.get(f"/api/sessions/{sid}/download/{what}.{fmt}")
+        assert r.status_code == 200, (what, fmt, r.data[:200])
+        assert f"weekly-sync-{what}.{fmt}" in r.headers["Content-Disposition"]
+        return r.data
+
+    assert get("report", "md").startswith(b"# Weekly sync")
+    txt = get("report", "txt").decode()
+    assert "**" not in txt and "|---" not in txt and "Prepare budget  |  Amina" in txt
+    assert b"<table>" in get("report", "html")
+    doc = Document(io.BytesIO(get("report", "docx")))
+    assert any(p.text == "Decisions" and p.style.name.startswith("Heading") for p in doc.paragraphs)
+    assert doc.tables[0].cell(1, 1).text == "Amina"
+    prs = Presentation(io.BytesIO(get("slides", "pptx")))
+    assert len(prs.slides) == 1 + 4
+    assert b'"slides"' in get("slides", "json")
+    srt = get("transcript", "srt").decode()
+    assert srt.startswith("1\n00:00:00,000 --> 00:00:05,000\n")
+    assert get("transcript", "vtt").startswith(b"WEBVTT")
+    assert b"Part 1 opening" in get("transcript", "txt")
+    Document(io.BytesIO(get("transcript", "docx")))
+    assert b'"segments"' in get("transcript", "json")
+    assert client.get(f"/api/sessions/{sid}/download/report.exe").status_code == 404

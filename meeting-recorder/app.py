@@ -3,6 +3,7 @@ Whisper (English or Kiswahili) and turn it into a formatted report via OpenRoute
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -14,6 +15,7 @@ load_dotenv(BASE_DIR / ".env")
 
 from flask import Flask, Response, jsonify, render_template, request, send_file  # noqa: E402
 
+import exports  # noqa: E402
 import services  # noqa: E402
 from services import LANGUAGES, MAX_MINUTES, REPORT_LANGUAGES, Processor, Store  # noqa: E402
 
@@ -39,6 +41,7 @@ def create_app(data_dir: Path | None = None, transcriber=None, writer=None) -> F
         out["has_audio"] = store.audio_path(sid).exists()
         out["has_transcript"] = (store.dir(sid) / "transcript.json").exists()
         out["has_report"] = (store.dir(sid) / "report.md").exists()
+        out["has_slides"] = (store.dir(sid) / "slides.json").exists()
         return out
 
     def get_or_404(sid: str):
@@ -73,6 +76,14 @@ def create_app(data_dir: Path | None = None, transcriber=None, writer=None) -> F
     @app.get("/api/template")
     def get_template():
         return jsonify({"template": store.get_template(), "default": services.DEFAULT_TEMPLATE})
+
+    @app.get("/api/settings")
+    def get_settings():
+        return jsonify(store.get_settings())
+
+    @app.put("/api/settings")
+    def put_settings():
+        return jsonify(store.set_settings(request.get_json(silent=True) or {}))
 
     @app.put("/api/template")
     def put_template():
@@ -134,6 +145,7 @@ def create_app(data_dir: Path | None = None, transcriber=None, writer=None) -> F
         out = public(meta)
         out["report"] = store.read_text(sid, "report.md")
         out["transcript"] = store.read_json(sid, "transcript.json")
+        out["slides"] = store.read_json(sid, "slides.json")
         return jsonify(out)
 
     @app.patch("/api/sessions/<sid>")
@@ -238,6 +250,70 @@ def create_app(data_dir: Path | None = None, transcriber=None, writer=None) -> F
             return jsonify({"error": "No report yet."}), 404
         return Response(text, mimetype="text/markdown; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="{slug(meta)}-report.md"'})
+
+    @app.post("/api/sessions/<sid>/slides")
+    def rebuild_slides(sid):
+        meta, err = get_or_404(sid)
+        if err:
+            return err
+        if not (store.dir(sid) / "report.md").exists():
+            return jsonify({"error": "Write the report first."}), 409
+        body = request.get_json(silent=True) or {}
+        deck = processor.make_slides(sid, body.get("model") or None)
+        return jsonify({"slides": deck})
+
+    DOWNLOADS = {
+        ("report", "md"): "text/markdown; charset=utf-8",
+        ("report", "txt"): "text/plain; charset=utf-8",
+        ("report", "html"): "text/html; charset=utf-8",
+        ("report", "docx"): "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ("slides", "pptx"): "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ("slides", "json"): "application/json; charset=utf-8",
+        ("transcript", "txt"): "text/plain; charset=utf-8",
+        ("transcript", "docx"): "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ("transcript", "srt"): "application/x-subrip; charset=utf-8",
+        ("transcript", "vtt"): "text/vtt; charset=utf-8",
+        ("transcript", "json"): "application/json; charset=utf-8",
+    }
+
+    @app.get("/api/sessions/<sid>/download/<what>.<fmt>")
+    def download(sid, what, fmt):
+        meta, err = get_or_404(sid)
+        if err:
+            return err
+        mime = DOWNLOADS.get((what, fmt))
+        if not mime:
+            return jsonify({"error": "That format is not available."}), 404
+        meta_line = ", ".join(filter(None, [
+            services.deck_subtitle(meta), f"report by {meta['model']}" if meta.get("model") else None]))
+        if what == "report":
+            md = store.read_text(sid, "report.md")
+            if md is None:
+                return jsonify({"error": "No report yet."}), 404
+            data = {"md": lambda: md,
+                    "txt": lambda: exports.md_to_text(md),
+                    "html": lambda: exports.report_html(meta["title"], meta_line, md, meta["language"]),
+                    "docx": lambda: exports.report_docx(meta["title"], meta_line, md)}[fmt]()
+        elif what == "slides":
+            deck = store.read_json(sid, "slides.json")
+            if deck is None:
+                if not (store.dir(sid) / "report.md").exists():
+                    return jsonify({"error": "No report yet."}), 404
+                deck = processor.make_slides(sid)
+            data = exports.slides_pptx(deck) if fmt == "pptx" else json.dumps(deck, ensure_ascii=False, indent=2)
+        else:
+            segments = store.read_json(sid, "transcript.json")
+            if segments is None:
+                return jsonify({"error": "No transcript yet."}), 404
+            data = {"txt": lambda: services.transcript_to_text(segments),
+                    "docx": lambda: exports.transcript_docx(meta["title"], meta_line, segments),
+                    "srt": lambda: exports.transcript_srt(segments),
+                    "vtt": lambda: exports.transcript_vtt(segments),
+                    "json": lambda: exports.transcript_json(meta, segments)}[fmt]()
+        suffix = {"report": "report", "slides": "slides", "transcript": "transcript"}[what]
+        name = f"{slug(meta)}-{suffix}.{fmt}"
+        body = data.encode("utf-8") if isinstance(data, str) else data
+        return Response(body, mimetype=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
     @app.errorhandler(413)
     def too_large(_e):

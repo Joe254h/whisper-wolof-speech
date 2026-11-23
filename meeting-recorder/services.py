@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import math
 import os
 import shutil
@@ -16,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import requests
+
+import exports
 
 LANGUAGES = {"en": "English", "sw": "Kiswahili"}
 REPORT_LANGUAGES = {"same": "Same as meeting", "en": "English", "sw": "Kiswahili"}
@@ -97,6 +100,33 @@ class Store:
             return DEFAULT_TEMPLATE
         self.template_path.write_text(text, encoding="utf-8")
         return text
+
+    # settings: vocabulary, report instructions, fixed header and footer ----------
+    SETTING_KEYS = ("vocabulary", "instructions", "header", "footer")
+
+    @property
+    def settings_path(self) -> Path:
+        return self.root / "settings.json"
+
+    def get_settings(self) -> dict:
+        data = {}
+        if self.settings_path.exists():
+            try:
+                data = json.loads(self.settings_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                data = {}
+        return {k: str(data.get(k, "")) for k in self.SETTING_KEYS}
+
+    def set_settings(self, values: dict) -> dict:
+        current = self.get_settings()
+        for k in self.SETTING_KEYS:
+            if k in values:
+                current[k] = str(values[k] or "").strip()[:5000]
+        tmp = self.settings_path.with_name(f"settings.{threading.get_ident()}.tmp")
+        with self._lock:
+            tmp.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+            _replace_with_retry(tmp, self.settings_path)
+        return current
 
     # sessions -----------------------------------------------------------------
     def dir(self, sid: str) -> Path:
@@ -299,12 +329,14 @@ class OpenAITranscriber:
     def ready(self) -> bool:
         return bool(self.api_key)
 
-    def transcribe(self, path: Path, language: str) -> list[Segment]:
+    def transcribe(self, path: Path, language: str, prompt: str | None = None) -> list[Segment]:
         if not self.api_key:
             raise RuntimeError(f"{self.key_name} is not set. Add it to meeting-recorder/.env.")
         verbose = "whisper" in self.model  # Whisper models return timestamped segments
         data = {"model": self.model, "language": language, "temperature": "0",
                 "response_format": "verbose_json" if verbose else "json"}
+        if prompt:
+            data["prompt"] = prompt
         for attempt in range(6):
             with open(path, "rb") as fh:
                 resp = requests.post(
@@ -348,13 +380,14 @@ class LocalTranscriber:
         except ImportError:
             return False
 
-    def transcribe(self, path: Path, language: str) -> list[Segment]:
+    def transcribe(self, path: Path, language: str, prompt: str | None = None) -> list[Segment]:
         from faster_whisper import WhisperModel
 
         with self._lock:
             if self._model is None:
                 self._model = WhisperModel(self.model_name, device="auto", compute_type="int8")
-            segments, _ = self._model.transcribe(str(path), language=language, vad_filter=True)
+            segments, _ = self._model.transcribe(str(path), language=language, vad_filter=True,
+                                                   initial_prompt=prompt)
             return [Segment(s.start, s.end, s.text.strip()) for s in segments]
 
 
@@ -387,7 +420,38 @@ def transcript_to_text(segments: list[dict], timestamps: bool = True) -> str:
     return "\n".join(lines)
 
 
-def build_messages(meta: dict, template: str, transcript: str) -> list[dict]:
+def vocabulary_terms(text: str) -> list[str]:
+    """One term per line or comma-separated; duplicates removed, order kept."""
+    seen, terms = set(), []
+    for raw in re.split(r"[\n,;]+", text or ""):
+        term = raw.strip()
+        if term and term.lower() not in seen:
+            seen.add(term.lower())
+            terms.append(term)
+    return terms
+
+
+def whisper_prompt(terms: list[str]) -> str | None:
+    """Whisper reads only about 224 tokens of prompt, so keep the list short."""
+    if not terms:
+        return None
+    out = ""
+    for t in terms:
+        nxt = f"{out}, {t}" if out else t
+        if len(nxt) > 600:
+            break
+        out = nxt
+    return out + "."
+
+
+def fill_placeholders(text: str, meta: dict) -> str:
+    date = time.strftime("%d %B %Y", time.localtime(meta["created_at"]))
+    return (text.replace("{{title}}", meta["title"]).replace("{{date}}", date)
+            .replace("{{language}}", LANGUAGES[meta["language"]]))
+
+
+def build_messages(meta: dict, template: str, transcript: str, settings: dict | None = None) -> list[dict]:
+    settings = settings or {}
     lang = meta["language"] if meta["report_language"] == "same" else meta["report_language"]
     report_lang = LANGUAGES[lang]
     date = time.strftime("%d %B %Y", time.localtime(meta["created_at"]))
@@ -402,13 +466,48 @@ def build_messages(meta: dict, template: str, transcript: str) -> list[dict]:
         "Transcripts contain recognition errors: correct obvious ones from context. "
         f"Write the entire report in {report_lang}. Output Markdown only, without code fences."
     )
+    terms = vocabulary_terms(settings.get("vocabulary", ""))
+    if terms:
+        system += (" The vocabulary list gives the correct spelling of names and terms used in this "
+                   "organisation; when the transcript has something that sounds like one of them, use that spelling.")
+    if settings.get("instructions"):
+        system += f"\n\nAdditional instructions from the user:\n{settings['instructions']}"
     user = (
         f"Meeting title: {meta['title']}\nDate: {date}\n"
         f"Spoken language: {LANGUAGES[meta['language']]}\n\n"
-        f"REPORT TEMPLATE\n---\n{filled}\n---\n\n"
+        + (f"VOCABULARY (correct spellings)\n{', '.join(terms)}\n\n" if terms else "")
+        + f"REPORT TEMPLATE\n---\n{filled}\n---\n\n"
         f"TRANSCRIPT (timestamps are mm:ss from the start of the recording)\n---\n{transcript}\n---"
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def build_slide_messages(meta: dict, report_md: str, settings: dict | None = None) -> list[dict]:
+    settings = settings or {}
+    lang = meta["language"] if meta["report_language"] == "same" else meta["report_language"]
+    system = (
+        "You turn meeting reports into a short slide deck for a busy reader who will skim it in two minutes. "
+        "Return JSON only, no prose and no code fences, with this shape: "
+        '{"title": str, "subtitle": str, "slides": [{"title": str, "lead": str, "bullets": [str], '
+        '"table": {"columns": [str], "rows": [[str]]}}]}. '
+        "Make 4 to 8 slides in this order where the report has content: at a glance (lead = the one-sentence outcome), "
+        "key points, decisions, action items (as a table with columns Action, Owner, Due), risks or open questions, "
+        "next steps. Each bullet is under 14 words and starts with the important word. Leave out empty sections. "
+        "Use only facts from the report. "
+        f"Write every slide in {LANGUAGES[lang]}."
+    )
+    if settings.get("instructions"):
+        system += f"\n\nAdditional instructions from the user:\n{settings['instructions']}"
+    user = f"Meeting title: {meta['title']}\n\nREPORT\n---\n{report_md}\n---"
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def deck_subtitle(meta: dict) -> str:
+    date = time.strftime("%d %B %Y", time.localtime(meta["created_at"]))
+    parts = [date, LANGUAGES[meta["language"]]]
+    if meta.get("duration_seconds"):
+        parts.append(f"{max(1, round(meta['duration_seconds'] / 60))} min meeting")
+    return ", ".join(parts)
 
 
 class OpenRouterWriter:
@@ -514,7 +613,8 @@ class Processor:
 
             self.store.update(sid, stage=label(0), progress=0.08)
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {pool.submit(self.transcriber.transcribe, part, meta["language"]): i
+                prompt = whisper_prompt(vocabulary_terms(self.store.get_settings()["vocabulary"]))
+                futures = {pool.submit(self.transcriber.transcribe, part, meta["language"], prompt): i
                            for i, part in enumerate(parts)}
                 for fut in as_completed(futures):
                     results[futures[fut]] = fut.result()  # re-raises the first failure
@@ -539,10 +639,33 @@ class Processor:
         if not segments:
             raise RuntimeError("There is no transcript to summarise yet.")
         self.store.update(sid, status="writing", stage="Writing the report", progress=0.9)
-        messages = build_messages(meta, self.store.get_template(), transcript_to_text(segments))
+        settings = self.store.get_settings()
+        messages = build_messages(meta, self.store.get_template(), transcript_to_text(segments), settings)
         report, used = self.writer.write(messages, model)
+        # Fixed text goes in word for word, not through the model.
+        if settings["header"]:
+            report = f"{fill_placeholders(settings['header'], meta)}\n\n{report}"
+        if settings["footer"]:
+            report = f"{report}\n\n---\n\n{fill_placeholders(settings['footer'], meta)}"
         self.store.write_text(sid, "report.md", report)
-        self.store.update(sid, model=used)
+        self.store.update(sid, model=used, stage="Making the slides", progress=0.96)
+        self.make_slides(sid, model)
+
+    def make_slides(self, sid: str, model: str | None = None) -> dict:
+        """Skim deck from the saved report. Falls back to the report's own sections, so it never fails the job."""
+        meta = self.store.load(sid)
+        report = self.store.read_text(sid, "report.md") or ""
+        subtitle = deck_subtitle(meta)
+        deck = None
+        try:
+            text, _ = self.writer.write(build_slide_messages(meta, report, self.store.get_settings()), model)
+            deck = exports.normalise_deck(exports.parse_json_block(text), meta["title"], subtitle)
+        except Exception:
+            deck = None
+        if deck is None:
+            deck = exports.slides_from_report(report, meta["title"], subtitle)
+        self.store.write_json(sid, "slides.json", deck)
+        return deck
 
     def recover(self) -> None:
         """Sessions interrupted by a restart are marked so the user can retry."""
