@@ -29,6 +29,7 @@ Your microphone  ──┘                                                   │
   - The original audio.
   - PDFs come from the browser's print dialog: choose *Save as PDF*.
 - **Report settings.**
+  - AI model: Fast (the `.env` default), Smart (`google/gemini-2.5-pro`), Best writing (`anthropic/claude-sonnet-4.5`) or any OpenRouter model name. Saved on the server for every report.
   - Vocabulary: names and terms passed to Whisper as a spelling hint and to the report writer.
   - Template: your report format.
   - Instructions: extra guidance for the AI, for example tone or length.

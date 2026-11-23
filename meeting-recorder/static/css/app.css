@@ -551,6 +551,24 @@ dialog::backdrop { background: rgba(7, 6, 13, 0.6); backdrop-filter: blur(4px); 
 .stab textarea.tiny { min-height: 90px; }
 .stab textarea.mono { min-height: 340px; font: 0.88rem/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .stab .btn { align-self: flex-start; }
+.model-choices { display: grid; gap: 8px; }
+.model-choice { position: relative; display: block; cursor: pointer; }
+.model-choice > input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+.model-choice > span {
+  display: grid; grid-template-columns: 110px 1fr; gap: 2px 14px; align-items: baseline;
+  padding: 14px 16px; border-radius: var(--r); border: 1px solid var(--line); background: var(--bg);
+  transition: border-color 0.15s, background-color 0.15s;
+}
+.model-choice b { font: 700 0.95rem/1.2 var(--display); letter-spacing: -0.02em; grid-row: span 2; }
+.model-choice small { color: var(--muted); font-size: 0.8rem; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.model-choice em { font-style: normal; color: var(--text-soft); font-size: 0.88rem; }
+.model-choice #modelInput {
+  height: 38px; padding: 0 12px; border-radius: var(--r-sm); border: 1px solid var(--line);
+  background: var(--surface); color: var(--text); font: 0.88rem ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+.model-choice > input:checked + span { border-color: var(--meet); background: color-mix(in srgb, var(--meet) 8%, var(--bg)); }
+.model-choice > input:focus-visible + span { outline: 2.5px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 600px) { .model-choice > span { grid-template-columns: 1fr; } .model-choice b { grid-row: auto; } }
 .dialog-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
 .toast {

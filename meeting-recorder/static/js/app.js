@@ -22,7 +22,8 @@ const STATUS_LABEL = {
 };
 const LANG = { en: "English", sw: "Kiswahili" };
 
-try { state.model = localStorage.getItem("kikao.model") || ""; } catch (_) { /* storage blocked */ }
+// Older versions kept the model in this browser; it now lives in Report settings on the server.
+try { localStorage.removeItem("kikao.model"); } catch (_) { /* storage blocked */ }
 
 // ---------------------------------------------------------------- helpers
 
@@ -110,7 +111,7 @@ async function loadConfig() {
     s.textContent = p.ok ? p.on : p.off;
     $("#services").append(s);
   }
-  $("#modelInput").placeholder = c.writer.model;
+  $("#defaultModelName").textContent = c.writer.model;
 }
 
 // ---------------------------------------------------------------- tape canvas
@@ -820,8 +821,11 @@ async function openTemplate() {
   $("#instructionsText").value = settings.instructions;
   $("#headerText").value = settings.header;
   $("#footerText").value = settings.footer;
-  $("#modelInput").value = state.model;
-  switchSettingsTab("vocab");
+  const saved = settings.model || "";
+  const preset = $$('input[name="modelPreset"]').find((r) => r.value === saved);
+  (preset || $('input[name="modelPreset"][value="custom"]')).checked = true;
+  $("#modelInput").value = preset ? "" : saved;
+  switchSettingsTab("model");
   $("#templateDialog").showModal();
 }
 
@@ -841,17 +845,24 @@ async function saveTemplate() {
       api("/api/template", json({ template: $("#templateText").value })),
       api("/api/settings", json({
         vocabulary: $("#vocabText").value, instructions: $("#instructionsText").value,
-        header: $("#headerText").value, footer: $("#footerText").value,
+        header: $("#headerText").value, footer: $("#footerText").value, model: chosenModel(),
       })),
     ]);
   } catch (e) {
     toast(e.message);
     return;
   }
-  state.model = $("#modelInput").value.trim();
-  try { localStorage.setItem("kikao.model", state.model); } catch (_) { /* storage blocked */ }
+  // The model is now saved on the server for every report; nothing is kept in this browser.
+  state.model = "";
+  try { localStorage.removeItem("kikao.model"); } catch (_) { /* storage blocked */ }
   $("#templateDialog").close();
   toast("Settings saved. They apply to the next report you write.");
+}
+
+function chosenModel() {
+  const picked = $('input[name="modelPreset"]:checked');
+  if (!picked) return "";
+  return picked.value === "custom" ? $("#modelInput").value.trim() : picked.value;
 }
 
 async function resetTemplate() {
@@ -1076,6 +1087,7 @@ $("#deleteBtn").addEventListener("click", deleteSelected);
 $("#openTemplate").addEventListener("click", openTemplate);
 $$("[data-stab]").forEach((t) => t.addEventListener("click", () => switchSettingsTab(t.dataset.stab)));
 $("#saveTemplate").addEventListener("click", saveTemplate);
+$("#modelInput").addEventListener("focus", () => { $('input[name="modelPreset"][value="custom"]').checked = true; });
 $("#resetTemplate").addEventListener("click", resetTemplate);
 
 // ---------------------------------------------------------------- theme

@@ -262,13 +262,29 @@
     <form method="dialog" class="dialog-body">
       <h2 id="templateTitle">Report settings</h2>
       <div class="stabs" role="tablist">
-        <button role="tab" class="stab-btn active" data-stab="vocab" aria-selected="true" type="button">Vocabulary</button>
+        <button role="tab" class="stab-btn active" data-stab="model" aria-selected="true" type="button">AI model</button>
+        <button role="tab" class="stab-btn" data-stab="vocab" aria-selected="false" type="button">Vocabulary</button>
         <button role="tab" class="stab-btn" data-stab="template" aria-selected="false" type="button">Template</button>
         <button role="tab" class="stab-btn" data-stab="instructions" aria-selected="false" type="button">Instructions</button>
         <button role="tab" class="stab-btn" data-stab="fixed" aria-selected="false" type="button">Header and footer</button>
       </div>
 
-      <section class="stab" data-stab-panel="vocab">
+      <section class="stab" data-stab-panel="model">
+        <p class="hint">The model that reads the transcript and writes the report and slides, through OpenRouter. Smarter models catch more decisions and owners in long or messy meetings, and cost more per report.</p>
+        <div class="model-choices" role="radiogroup" aria-label="AI model">
+          <label class="model-choice"><input type="radio" name="modelPreset" value="">
+            <span><b>Fast</b><small id="defaultModelName">The default from your .env file</small><em>Cheapest. Fine for short, clear meetings.</em></span></label>
+          <label class="model-choice"><input type="radio" name="modelPreset" value="google/gemini-2.5-pro">
+            <span><b>Smart</b><small>google/gemini-2.5-pro</small><em>Stronger reasoning on long meetings with many speakers.</em></span></label>
+          <label class="model-choice"><input type="radio" name="modelPreset" value="anthropic/claude-sonnet-4.5">
+            <span><b>Best writing</b><small>anthropic/claude-sonnet-4.5</small><em>The most polished reports. Costs the most.</em></span></label>
+          <label class="model-choice"><input type="radio" name="modelPreset" value="custom">
+            <span><b>Other</b><small>Any model name from openrouter.ai/models</small>
+            <input id="modelInput" type="text" placeholder="e.g. openai/gpt-4.1" aria-label="OpenRouter model name"></span></label>
+        </div>
+      </section>
+
+      <section class="stab" data-stab-panel="vocab" hidden>
         <p class="hint">Names, places, acronyms and technical terms that come up in your meetings, one per line. Whisper uses them to spell what it hears, and the report keeps the same spelling.</p>
         <textarea id="vocabText" class="short" spellcheck="false" placeholder="Northwind Institute&#10;Dr. Wanjiru&#10;M-Pesa&#10;Shamba Bora project"></textarea>
       </section>
@@ -282,10 +298,6 @@
       <section class="stab" data-stab-panel="instructions" hidden>
         <p class="hint">Extra guidance for the AI writing the report and slides.</p>
         <textarea id="instructionsText" class="short" placeholder="Use a formal tone. Keep the summary under 100 words. Refer to participants by their role."></textarea>
-        <label class="field model-field">
-          <span>OpenRouter model for new reports</span>
-          <input id="modelInput" type="text" placeholder="google/gemini-2.5-flash">
-        </label>
       </section>
 
       <section class="stab" data-stab-panel="fixed" hidden>

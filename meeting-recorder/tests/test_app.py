@@ -527,3 +527,28 @@ def test_openrouter_caps_output_tokens(monkeypatch):
     w = services.OpenRouterWriter()
     assert w.write([{"role": "user", "content": "x"}])[0] == "# R"
     assert sent["max_tokens"] == 6000
+
+
+def test_model_saved_in_settings_is_used_and_prompt_is_smart(env):
+    client, transcriber, writer, tmp = env
+    client.put("/api/settings", json={"model": "google/gemini-2.5-pro"})
+    used = []
+    real = writer.write
+
+    def spy(messages, model=None):
+        used.append(model)
+        return real(messages, model)
+
+    writer.write = spy
+    wav = tmp / "m.wav"
+    make_audio(wav, 10, ("-c:a", "pcm_s16le"))
+    with open(wav, "rb") as fh:
+        sid = client.post("/api/sessions/upload", data={"audio": (fh, "m.wav"), "language": "en"},
+                          content_type="multipart/form-data").get_json()["id"]
+    s = wait_done(client, sid)
+    assert s["status"] == "done" and s["model"] == "google/gemini-2.5-pro"
+    assert used == ["google/gemini-2.5-pro", "google/gemini-2.5-pro"]  # report and slides
+    system = writer.messages[0]["content"]
+    assert "DECIDED" in system and "[mm:ss]" in system and "Kiswahili" in system
+    import time as _t
+    assert _t.strftime("%A", _t.localtime(s["created_at"])) in system

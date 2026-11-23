@@ -102,7 +102,7 @@ class Store:
         return text
 
     # settings: vocabulary, report instructions, fixed header and footer ----------
-    SETTING_KEYS = ("vocabulary", "instructions", "header", "footer")
+    SETTING_KEYS = ("vocabulary", "instructions", "header", "footer", "model")
 
     @property
     def settings_path(self) -> Path:
@@ -473,14 +473,35 @@ def build_messages(meta: dict, template: str, transcript: str, settings: dict | 
     filled = (template.replace("{{title}}", meta["title"])
               .replace("{{date}}", date)
               .replace("{{language}}", LANGUAGES[meta["language"]]))
-    system = (
-        "You write accurate meeting reports from raw speech-to-text transcripts. "
-        "Follow the report template exactly: keep its headings, order and tables, and replace the guidance "
-        "text under each heading with content from the meeting. Use only facts stated in the transcript; "
-        "never invent names, numbers, dates or decisions. When something is unclear, say so briefly. "
-        "Transcripts contain recognition errors: correct obvious ones from context. "
-        f"Write the entire report in {report_lang}. Output Markdown only, without code fences."
-    )
+    weekday = time.strftime("%A", time.localtime(meta["created_at"]))
+    system = f"""You are an experienced meeting secretary for organisations in East Africa. You turn raw,
+machine-made transcripts of meetings into reports that a busy manager can trust and act on.
+
+Before writing, read the whole transcript and work out, silently:
+- who took part and their roles, from introductions, how people address each other and what they say they are
+  responsible for;
+- the agenda as it actually ran, even if nobody announced it;
+- what was DECIDED (agreed, approved, "tumekubaliana", "let's go with") versus only proposed or discussed;
+- every commitment someone made ("I will", "nitafanya", "can you ... by Friday"), with its owner and deadline;
+- figures, amounts, dates and names, exactly as stated.
+
+Then write the report. Rules:
+1. Follow the report template exactly: keep its headings, order and tables, and replace the guidance text under each
+   heading with content from this meeting. Do not add or drop headings. If a section has nothing, write a short
+   plain sentence saying so (for example "No decisions were recorded.").
+2. Accuracy over polish. Use only what the transcript supports. Never invent names, numbers, dates, owners or
+   decisions. If something is ambiguous, write it with "(unclear in the recording)" rather than guessing.
+3. The meeting took place on {weekday}, {date}. Turn relative dates into calendar dates where it is safe
+   ("next Friday" becomes the actual date), keeping the original wording in brackets if there is any doubt.
+4. After each decision and action item add the time it was said, as [mm:ss] from the transcript, so readers can
+   check the recording.
+5. Attribute views and commitments to people when the transcript names them. Do not attribute when it does not.
+6. The transcript comes from speech recognition. It has misheard words, no speaker labels and may mix English and
+   Kiswahili. Correct obvious recognition errors from context, and understand code-switching naturally.
+7. Be concise and specific: short paragraphs, concrete bullets, no filler such as "a productive discussion took
+   place". Lead each section with what matters most.
+
+Write the entire report in {report_lang}. Output Markdown only, without code fences or any commentary."""
     terms = vocabulary_terms(settings.get("vocabulary", ""))
     if terms:
         system += (" The vocabulary list gives the correct spelling of names and terms used in this "
@@ -557,6 +578,10 @@ class OpenRouterWriter:
                 continue
             if not resp.ok:
                 detail = _error_text(resp)
+                if resp.status_code in (400, 404) and "model" in detail.lower():
+                    raise RuntimeError(
+                        f"OpenRouter does not recognise the model \"{model}\". Pick another under Report settings, "
+                        f"AI model, then press Retry report. Details: {detail}")
                 if resp.status_code == 402:
                     raise RuntimeError(
                         "OpenRouter needs more credit for this report. Add credit at openrouter.ai/settings/credits "
@@ -657,7 +682,12 @@ class Processor:
         self.store.write_json(sid, "transcript.json", segments)
         self.store.write_text(sid, "transcript.txt", transcript_to_text(segments))
 
+    def _model(self, model: str | None) -> str | None:
+        """A model chosen for this job, else the one saved in Report settings, else the .env default."""
+        return (model or self.store.get_settings().get("model") or "").strip() or None
+
     def _report(self, sid: str, model: str | None) -> None:
+        model = self._model(model)
         meta = self.store.load(sid)
         segments = self.store.read_json(sid, "transcript.json")
         if not segments:
@@ -677,6 +707,7 @@ class Processor:
 
     def make_slides(self, sid: str, model: str | None = None) -> dict:
         """Skim deck from the saved report. Falls back to the report's own sections, so it never fails the job."""
+        model = self._model(model)
         meta = self.store.load(sid)
         report = self.store.read_text(sid, "report.md") or ""
         subtitle = deck_subtitle(meta)
